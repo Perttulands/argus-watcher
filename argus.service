@@ -1,3 +1,7 @@
+# DEPRECATED: This is the old chrote-based service file.
+# Use argus-polis.service instead for the current deployment.
+# This file is kept for reference only and should not be installed.
+#
 [Unit]
 Description=Argus Ops Watchdog
 After=network-online.target

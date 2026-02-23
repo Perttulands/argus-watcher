@@ -5,7 +5,10 @@ set -euo pipefail
 # Idempotent — safe to re-run to update configuration.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE_FILE="${SCRIPT_DIR}/argus.service"
+# Generate service file from template using current user/home
+INSTALL_USER="${SUDO_USER:-$USER}"
+INSTALL_HOME="$(eval echo ~$INSTALL_USER)"
+SERVICE_FILE="${SCRIPT_DIR}/argus.service.generated"
 SYSTEMD_DIR="/etc/systemd/system"
 ARGUS_ENV_DIR="/etc/argus"
 SYSTEM_ENV_FILE="${ARGUS_ENV_DIR}/argus.env"
@@ -66,9 +69,49 @@ sudo cp "$ENV_FILE" "$SYSTEM_ENV_FILE"
 sudo chmod 600 "$SYSTEM_ENV_FILE"
 sudo chown root:root "$SYSTEM_ENV_FILE"
 
-# Install systemd service
+# Generate and install systemd service from template
+echo "Generating systemd service for user ${INSTALL_USER} (home: ${INSTALL_HOME})..."
+cat > "$SERVICE_FILE" <<UNIT_EOF
+[Unit]
+Description=Argus Ops Watchdog
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/perttu/argus
+
+[Service]
+Type=simple
+User=${INSTALL_USER}
+Group=${INSTALL_USER}
+WorkingDirectory=${SCRIPT_DIR}
+Environment="PATH=${INSTALL_HOME}/.local/bin:${INSTALL_HOME}/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EnvironmentFile=-${SCRIPT_DIR}/argus.env
+ExecStart=/usr/bin/bash -lc './argus.sh'
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=argus
+
+# Resource limits
+MemoryMax=1G
+MemoryHigh=768M
+
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=${SCRIPT_DIR}/logs ${SCRIPT_DIR}/state ${INSTALL_HOME}/.openclaw-athena
+
+[Install]
+WantedBy=multi-user.target
+UNIT_EOF
+
 echo "Installing systemd service..."
 sudo cp "$SERVICE_FILE" "${SYSTEMD_DIR}/argus.service"
+rm -f "$SERVICE_FILE"
 
 # Reload systemd daemon
 echo "Reloading systemd daemon..."

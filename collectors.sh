@@ -70,14 +70,14 @@ collect_cgroup_memory_context() {
 collect_services() {
     echo "=== Services ==="
 
-    # openclaw-gateway: check ports 18505 (Athena) and 18789 (Mercury) (may run outside systemd)
+    # openclaw-gateway: check gateway port (configurable via ARGUS_GATEWAY_PORT, default 18505)
     echo -n "openclaw-gateway: "
     local gw_http
-    gw_http=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:18505/ 2>/dev/null) || gw_http="failed" # REASON: service reachability checks should not abort collection.
+    gw_http=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:${ARGUS_GATEWAY_PORT:-18505}/ 2>/dev/null) || gw_http="failed" # REASON: service reachability checks should not abort collection.
     if [[ "$gw_http" == "000" || "$gw_http" == "failed" ]]; then
-        echo "DOWN (port 18505 unreachable)"
+        echo "DOWN (port ${ARGUS_GATEWAY_PORT:-18505} unreachable)"
     else
-        echo "UP (port 18505, HTTP $gw_http)"
+        echo "UP (port ${ARGUS_GATEWAY_PORT:-18505}, HTTP $gw_http)"
     fi
 
     # athena-web removed from monitoring (2026-02-19)
@@ -180,7 +180,7 @@ collect_processes() {
 
     echo "Tmux sessions on openclaw socket:"
     local oc_count
-    oc_count=$(tmux -S /tmp/openclaw-coding-agents.sock list-sessions 2>/dev/null | wc -l) || oc_count=0 # REASON: missing tmux socket should be treated as zero sessions.
+    oc_count=$(tmux -S ${ARGUS_TMUX_SOCKET:-/tmp/openclaw-coding-agents.sock} list-sessions 2>/dev/null | wc -l) || oc_count=0 # REASON: missing tmux socket should be treated as zero sessions.
     oc_count=$(echo "$oc_count" | tr -d '[:space:]')
     echo "  Count: $oc_count"
 }
@@ -210,7 +210,7 @@ collect_agents() {
     fi
     echo "OpenClaw socket sessions:"
     local oc_sessions
-    oc_sessions=$(tmux -S /tmp/openclaw-coding-agents.sock list-sessions -F "    #{session_name}" 2>/dev/null) || true # REASON: missing OpenClaw socket should not be treated as an error.
+    oc_sessions=$(tmux -S ${ARGUS_TMUX_SOCKET:-/tmp/openclaw-coding-agents.sock} list-sessions -F "    #{session_name}" 2>/dev/null) || true # REASON: missing OpenClaw socket should not be treated as an error.
     if [[ -n "$oc_sessions" ]]; then
         echo "$oc_sessions"
     else

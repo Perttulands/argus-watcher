@@ -15,6 +15,13 @@ import (
 	"github.com/perttu/argus/internal/watchdog"
 )
 
+func envOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func main() {
 	logger := log.New(os.Stdout, "argus: ", log.LstdFlags|log.LUTC)
 	if err := run(logger); err != nil {
@@ -26,7 +33,7 @@ func main() {
 func run(logger *log.Logger) error {
 	var (
 		breadcrumbPath = flag.String("breadcrumb-file", "logs/watchdog.breadcrumb.json", "breadcrumb state file path")
-		healthAddr     = flag.String("health-addr", ":8080", "health server bind address (empty disables server)")
+		healthAddr     = flag.String("health-addr", envOrDefault("ARGUS_HEALTH_ADDR", ":8080"), "health server bind address (empty disables server)")
 		interval       = flag.Duration("interval", 5*time.Minute, "watchdog interval")
 		once           = flag.Bool("once", false, "run one cycle and exit")
 		dryRun         = flag.Bool("dry-run", false, "log intended actions without executing them")
