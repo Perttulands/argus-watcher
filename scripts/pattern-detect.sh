@@ -49,10 +49,9 @@ EOF
 )
 
 bead_id=""
-if command -v bd >/dev/null 2>&1; then # REASON: bead integration is optional.
-    bead_id=$(cd "$BEADS_WORKDIR" && bd create \
-        --title "$title" \
-        --description "$body" \
+if command -v br >/dev/null 2>&1; then # REASON: bead integration is optional.
+    bead_id=$(cd "$BEADS_WORKDIR" && br create "$title" \
+        -d "$body" \
         --labels argus,pattern \
         --priority 2 \
         --silent 2>/dev/null || true) # REASON: pattern reporting should continue even if bead creation fails.

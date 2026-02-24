@@ -20,13 +20,13 @@ EOF
 FAKE_BIN="$TEST_ROOT/bin"
 mkdir -p "$FAKE_BIN"
 export PATH="$FAKE_BIN:$PATH"
-export FAKE_BD_LOG="$TEST_ROOT/bd.log"
-touch "$FAKE_BD_LOG"
+export FAKE_BR_LOG="$TEST_ROOT/br.log"
+touch "$FAKE_BR_LOG"
 
-cat > "$FAKE_BIN/bd" <<'EOF'
+cat > "$FAKE_BIN/br" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-echo "$*" >> "$FAKE_BD_LOG"
+echo "$*" >> "$FAKE_BR_LOG"
 cmd="${1:-}"
 if [[ $# -gt 0 ]]; then
   shift
@@ -37,7 +37,7 @@ case "$cmd" in
   *) exit 1 ;;
 esac
 EOF
-chmod +x "$FAKE_BIN/bd"
+chmod +x "$FAKE_BIN/br"
 
 run_detect() {
     ARGUS_PROBLEMS_FILE="$PROBLEMS_FILE" \
@@ -49,11 +49,11 @@ run_detect() {
 }
 
 run_detect
-create_count_1=$(grep -c '^create ' "$FAKE_BD_LOG")
+create_count_1=$(grep -c '^create ' "$FAKE_BR_LOG")
 [[ "$create_count_1" -eq 1 ]] || { echo "expected one bead creation on first run" >&2; exit 1; }
 
 run_detect
-create_count_2=$(grep -c '^create ' "$FAKE_BD_LOG")
+create_count_2=$(grep -c '^create ' "$FAKE_BR_LOG")
 [[ "$create_count_2" -eq 1 ]] || { echo "expected no extra bead creation on second run" >&2; exit 1; }
 
 [[ -f "$STATE_FILE" ]] || { echo "state file missing" >&2; exit 1; }

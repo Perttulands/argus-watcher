@@ -187,12 +187,12 @@ find_open_bead_for_problem_key() {
     local problem_key="${1:-}"
     [[ -n "$problem_key" ]] || return 1
 
-    if ! command -v bd >/dev/null 2>&1; then # REASON: bead creation must be a no-op when bd is not installed.
+    if ! command -v br >/dev/null 2>&1; then # REASON: bead creation must be a no-op when br is not installed.
         return 1
     fi
 
     local open_json
-    open_json=$(cd "$ARGUS_BEADS_WORKDIR" && bd list --status open --json 2>/dev/null || echo "[]") # REASON: transient bd failures should not break monitoring.
+    open_json=$(cd "$ARGUS_BEADS_WORKDIR" && br list --status open 2>/dev/null || echo "[]") # REASON: transient br failures should not break monitoring.
     jq -r --arg marker "Problem key: ${problem_key}" \
         '.[] | select((.description // "") | contains($marker)) | .id' <<< "$open_json" | head -n1
 }
@@ -206,7 +206,7 @@ create_bead() {
     local problem_key="${6:-}"
     local seen_count="${7:-1}"
 
-    if ! command -v bd >/dev/null 2>&1; then # REASON: bd integration is optional and should degrade gracefully.
+    if ! command -v br >/dev/null 2>&1; then # REASON: br integration is optional and should degrade gracefully.
         return 0
     fi
 
@@ -235,9 +235,8 @@ Problem key: ${problem_key}
 EOF
 )
 
-    bead_id=$(cd "$ARGUS_BEADS_WORKDIR" && bd create \
-        --title "$title" \
-        --description "$body" \
+    bead_id=$(cd "$ARGUS_BEADS_WORKDIR" && br create "$title" \
+        -d "$body" \
         --priority "$ARGUS_BEAD_PRIORITY" \
         --labels argus \
         --silent 2>/dev/null || true) # REASON: creation failures should not fail Argus monitoring cycles.

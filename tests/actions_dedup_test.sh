@@ -19,12 +19,12 @@ mkdir -p "$ARGUS_BEADS_WORKDIR"
 FAKE_BIN="$TEST_ROOT/bin"
 mkdir -p "$FAKE_BIN"
 export PATH="$FAKE_BIN:$PATH"
-export FAKE_BD_OPEN_JSON="$TEST_ROOT/open.json"
-export FAKE_BD_CREATE_ID="athena-dedup"
-touch "$FAKE_BD_OPEN_JSON"
-echo "[]" > "$FAKE_BD_OPEN_JSON"
+export FAKE_BR_OPEN_JSON="$TEST_ROOT/open.json"
+export FAKE_BR_CREATE_ID="athena-dedup"
+touch "$FAKE_BR_OPEN_JSON"
+echo "[]" > "$FAKE_BR_OPEN_JSON"
 
-cat > "$FAKE_BIN/bd" <<'EOF'
+cat > "$FAKE_BIN/br" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 cmd="${1:-}"
@@ -33,10 +33,10 @@ if [[ $# -gt 0 ]]; then
 fi
 case "$cmd" in
   list)
-    cat "$FAKE_BD_OPEN_JSON"
+    cat "$FAKE_BR_OPEN_JSON"
     ;;
   create)
-    echo "${FAKE_BD_CREATE_ID}"
+    echo "${FAKE_BR_CREATE_ID}"
     ;;
   *)
     echo "unsupported command: $cmd" >&2
@@ -44,7 +44,7 @@ case "$cmd" in
     ;;
 esac
 EOF
-chmod +x "$FAKE_BIN/bd"
+chmod +x "$FAKE_BIN/br"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/actions.sh"
@@ -65,7 +65,7 @@ first_result=$(tail -n1 "$ARGUS_PROBLEMS_FILE" | jq -r '.action_result')
 assert_eq "$first_result" "success" "first alert should execute"
 
 problem_key=$(generate_problem_key "disk" "$alert_message")
-cat > "$FAKE_BD_OPEN_JSON" <<EOF
+cat > "$FAKE_BR_OPEN_JSON" <<EOF
 [{"id":"athena-open","description":"Problem key: ${problem_key}"}]
 EOF
 

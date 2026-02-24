@@ -128,9 +128,9 @@ Argus creates or reuses beads when an issue needs human attention:
 
 Behavior:
 
-- Command used: `bd create --title "[argus] <type>: <description>" ...`
+- Command used: `br create "[argus] <type>: <description>" ...`
 - Open-bead dedup key: `Problem key: <type>:<description_sha256_16>`
-- If `bd` is unavailable, Argus skips bead creation and continues monitoring.
+- If `br` is unavailable, Argus skips bead creation and continues monitoring.
 
 ## Alert Deduplication
 

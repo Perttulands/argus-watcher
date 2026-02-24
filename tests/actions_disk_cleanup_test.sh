@@ -19,7 +19,7 @@ export ARGUS_DISK_CLEAN_DRY_RUN=true
 FAKE_BIN="$TEST_ROOT/bin"
 mkdir -p "$FAKE_BIN"
 export PATH="$FAKE_BIN:$PATH"
-cat > "$FAKE_BIN/bd" <<'EOF'
+cat > "$FAKE_BIN/br" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 cmd="${1:-}"
@@ -32,7 +32,7 @@ case "$cmd" in
   *) exit 1 ;;
 esac
 EOF
-chmod +x "$FAKE_BIN/bd"
+chmod +x "$FAKE_BIN/br"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/actions.sh"
