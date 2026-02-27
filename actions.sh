@@ -239,7 +239,7 @@ EOF
         -d "$body" \
         --priority "$ARGUS_BEAD_PRIORITY" \
         --labels argus \
-        --silent 2>/dev/null || true) # REASON: creation failures should not fail Argus monitoring cycles.
+        --silent 2>/dev/null) || true # REASON: creation failures should not fail Argus monitoring cycles.
 
     bead_id=$(echo "$bead_id" | tr -d '[:space:]')
     if [[ "$bead_id" =~ ^[a-zA-Z0-9._-]+$ ]]; then

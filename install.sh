@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Generate service file from template using current user/home
 INSTALL_USER="${SUDO_USER:-$USER}"
-INSTALL_HOME="$(eval echo ~$INSTALL_USER)"
+INSTALL_HOME="$(eval echo ~"$INSTALL_USER")"
 SERVICE_FILE="${SCRIPT_DIR}/argus.service.generated"
 SYSTEMD_DIR="/etc/systemd/system"
 ARGUS_ENV_DIR="/etc/argus"

@@ -68,6 +68,7 @@ call_llm() {
 
     local response exit_code stderr_file
     stderr_file=$(mktemp)
+    # shellcheck disable=SC2016 # Single quotes intentional: script is passed to bash -c
     response=$(timeout "$LLM_TIMEOUT" bash -c 'echo "$1" | claude -p --model haiku --output-format text 2>"$2"' _ "$full_prompt" "$stderr_file") && exit_code=0 || exit_code=$?
 
     if [[ $exit_code -ne 0 ]]; then
@@ -322,6 +323,7 @@ main() {
 }
 
 # Handle signals gracefully — wait for current work to finish
+# shellcheck disable=SC2034 # Read by trap handler
 SHUTTING_DOWN=false
 trap 'SHUTTING_DOWN=true; log INFO "Received signal, shutting down..."; exit 0' SIGTERM SIGINT
 
