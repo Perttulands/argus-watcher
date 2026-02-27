@@ -8,6 +8,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ### Added
 - `.truthsayer.toml` config and pre-commit hook for agent instruction enforcement (7a79735)
+- Shell test coverage for `argus.sh` main loop functions (`call_llm`, `process_llm_response`, `rotate_log`) and `collectors.sh` functions (`collect_services`, `collect_system`, `collect_processes`, `collect_agents`, `collect_cgroup_memory_context`)
+
+### Fixed
+- Shellcheck lint failures: quoting fixes in `collectors.sh` and `install.sh`, suppression directives in `argus.sh`, SC2015 fix in `actions.sh`
 
 ### Changed
 - README: further mythology-forward rewrite — spicy, standalone voice (f042a84, e5f62eb)
