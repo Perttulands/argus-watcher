@@ -220,6 +220,11 @@ sudo systemctl enable --now argus
 
 Dependencies: `curl`, `jq`, `bc`, systemd. That's it.
 
+## Dependencies
+
+Requires: `claude` CLI -- Argus sends collected metrics to Claude Haiku for decision-making.
+Optional: `relay` -- publishes structured problem events to other agents.
+
 ## Part of the Agora
 
 Argus was forged in **[Athena's Agora](https://github.com/Perttulands/athena-workspace)** — an autonomous coding system where AI agents build software and a hound with one red eye makes sure the server doesn't burn down while they do it.

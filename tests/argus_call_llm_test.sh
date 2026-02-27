@@ -64,7 +64,7 @@ call_llm() {
     response=$(timeout "$LLM_TIMEOUT" bash -c 'echo "$1" | claude -p --model haiku --output-format text 2>"$2"' _ "$full_prompt" "$stderr_file") && exit_code=0 || exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
         local stderr_output
-        stderr_output=$(cat "$stderr_file" 2>/dev/null; rm -f "$stderr_file")
+        stderr_output=$(cat "$stderr_file" 2>/dev/null; rm -f "$stderr_file") # REASON: temp file may already be cleaned up
         if [[ $exit_code -eq 124 ]]; then
             log ERROR "claude -p timed out after ${LLM_TIMEOUT}s"
         else
@@ -114,7 +114,7 @@ MOCKEOF
 chmod +x "$FAKE_BIN/claude"
 
 : > "$LOG_FILE"
-if call_llm "sys" "msg" 2>/dev/null; then
+if call_llm "sys" "msg" 2>/dev/null; then # REASON: test intentionally triggers error; stderr noise is expected
     echo "FAIL: should fail on non-zero exit" >&2
     exit 1
 fi
@@ -130,7 +130,7 @@ MOCKEOF
 chmod +x "$FAKE_BIN/claude"
 
 : > "$LOG_FILE"
-if call_llm "sys" "msg" 2>/dev/null; then
+if call_llm "sys" "msg" 2>/dev/null; then # REASON: test intentionally triggers error; stderr noise is expected
     echo "FAIL: should fail on empty response" >&2
     exit 1
 fi
@@ -146,7 +146,7 @@ chmod +x "$FAKE_BIN/claude"
 
 LLM_TIMEOUT=1
 : > "$LOG_FILE"
-if call_llm "sys" "msg" 2>/dev/null; then
+if call_llm "sys" "msg" 2>/dev/null; then # REASON: test intentionally triggers timeout; stderr noise is expected
     echo "FAIL: should fail on timeout" >&2
     exit 1
 fi

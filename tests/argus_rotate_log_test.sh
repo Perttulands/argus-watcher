@@ -65,7 +65,7 @@ rotate_log() {
         return 0
     fi
     local size
-    size=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
+    size=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0) # REASON: file may not exist yet; 0 means no rotation needed.
     if (( size > MAX_LOG_SIZE )); then
         local i
         for (( i = MAX_LOG_FILES; i >= 1; i-- )); do

@@ -1,0 +1,35 @@
+[Unit]
+Description=Argus Ops Watchdog
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/perttu/argus
+
+[Service]
+Type=simple
+User=polis
+Group=polis
+WorkingDirectory=/home/polis/tools/argus
+Environment="PATH=/home/polis/.local/bin:/home/polis/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EnvironmentFile=-/home/polis/tools/argus/argus.env
+ExecStart=/usr/bin/bash -lc './argus.sh'
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=argus
+
+# Resource limits
+MemoryMax=1G
+MemoryHigh=768M
+
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/home/polis/tools/argus/logs /home/polis/tools/argus/state /home/polis/agents/athena/workspace
+
+[Install]
+WantedBy=multi-user.target

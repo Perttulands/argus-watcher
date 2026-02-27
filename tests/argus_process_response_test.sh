@@ -60,7 +60,7 @@ log() {
 process_llm_response() {
     local response="$1"
     response=$(echo "$response" | sed '/^```\(json\)\{0,1\}$/d')
-    if ! echo "$response" | jq empty 2>/dev/null; then
+    if ! echo "$response" | jq empty 2>/dev/null; then # REASON: jq parse errors are less useful than our raw response log below.
         log ERROR "LLM response is not valid JSON"
         log ERROR "Raw response (first 500 chars): ${response:0:500}"
         return 1
@@ -69,7 +69,7 @@ process_llm_response() {
     assessment=$(echo "$response" | jq -r '.assessment // "No assessment provided"')
     log INFO "Assessment: $assessment"
     local obs_output
-    obs_output=$(echo "$response" | jq -r 'if .observations then .observations[] else empty end' 2>/dev/null) || true
+    obs_output=$(echo "$response" | jq -r 'if .observations then .observations[] else empty end' 2>/dev/null) || true # REASON: response already validated; empty/missing observations is normal.
     if [[ -n "$obs_output" ]]; then
         log INFO "Observations:"
         while IFS= read -r obs; do
@@ -77,7 +77,7 @@ process_llm_response() {
         done <<< "$obs_output"
     fi
     local actions_output
-    actions_output=$(echo "$response" | jq -c 'if .actions then .actions[] else empty end' 2>/dev/null) || true
+    actions_output=$(echo "$response" | jq -c 'if .actions then .actions[] else empty end' 2>/dev/null) || true # REASON: response already validated; empty/missing actions is normal.
     if [[ -z "$actions_output" ]]; then
         log INFO "No actions to execute"
         return 0
