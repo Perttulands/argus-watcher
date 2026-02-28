@@ -31,14 +31,20 @@ func main() {
 }
 
 func run(logger *log.Logger) error {
+	fs := flag.NewFlagSet("argus", flag.ContinueOnError)
 	var (
-		breadcrumbPath = flag.String("breadcrumb-file", "logs/watchdog.breadcrumb.json", "breadcrumb state file path")
-		healthAddr     = flag.String("health-addr", envOrDefault("ARGUS_HEALTH_ADDR", ":8080"), "health server bind address (empty disables server)")
-		interval       = flag.Duration("interval", 5*time.Minute, "watchdog interval")
-		once           = flag.Bool("once", false, "run one cycle and exit")
-		dryRun         = flag.Bool("dry-run", false, "log intended actions without executing them")
+		breadcrumbPath = fs.String("breadcrumb-file", "logs/watchdog.breadcrumb.json", "breadcrumb state file path")
+		healthAddr     = fs.String("health-addr", envOrDefault("ARGUS_HEALTH_ADDR", ":8080"), "health server bind address (empty disables server)")
+		interval       = fs.Duration("interval", 5*time.Minute, "watchdog interval")
+		once           = fs.Bool("once", false, "run one cycle and exit")
+		dryRun         = fs.Bool("dry-run", false, "log intended actions without executing them")
 	)
-	flag.Parse()
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("invalid arguments: %w", err)
+	}
 
 	wd, err := watchdog.New(watchdog.Config{
 		BreadcrumbPath: *breadcrumbPath,

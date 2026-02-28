@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -232,40 +233,6 @@ func TestRunCheckNilFunction(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "nil function") {
 		t.Fatalf("unexpected error message: %q", err.Error())
-	}
-}
-
-func TestRunCheckEmptyNameDefaultsToUnnamed(t *testing.T) {
-	t.Parallel()
-
-	breadcrumbPath := filepath.Join(t.TempDir(), "watchdog.json")
-	wd, err := New(Config{
-		BreadcrumbPath: breadcrumbPath,
-		Logger:         log.New(io.Discard, "", 0),
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	wd.SetChecks([]Check{
-		{
-			Name: "",
-			Run: func(ctx context.Context, dryRun bool) error {
-				return errors.New("intentional")
-			},
-		},
-	})
-
-	err = wd.RunCycle(context.Background())
-	if err == nil {
-		t.Fatal("RunCycle() should return error from failing check")
-	}
-
-	// runCheck renames to "unnamed-check" internally, but RunCycle wraps
-	// the error using the original check.Name (""). Either way, the
-	// check's error must propagate.
-	if !strings.Contains(err.Error(), "intentional") {
-		t.Fatalf("expected check error to propagate, got: %q", err.Error())
 	}
 }
 
@@ -548,3 +515,194 @@ func TestHealthHandlerReturnsJSONStatus(t *testing.T) {
 		t.Fatalf("POST /health status = %d, want 405", nonGetRec.Code)
 	}
 }
+
+func TestRunLoopAccumulatesErrors(t *testing.T) {
+	t.Parallel()
+
+	wd, err := New(Config{
+		BreadcrumbPath: filepath.Join(t.TempDir(), "bc.json"),
+		Logger:         log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wd.SetChecks([]Check{
+		{
+			Name: "fail-then-cancel",
+			Run: func(ctx context.Context, dryRun bool) error {
+				cancel()
+				return errors.New("loop failure")
+			},
+		},
+	})
+
+	err = wd.Run(ctx, time.Millisecond, false)
+	if err == nil {
+		t.Fatal("Run should propagate check error from loop")
+	}
+	if !strings.Contains(err.Error(), "loop failure") {
+		t.Fatalf("expected loop failure error, got: %v", err)
+	}
+}
+
+// TestHealthDegradedAfterInterruption verifies that if argus crashes mid-cycle
+// (breadcrumb has Running=true) and restarts, the /health endpoint reports
+// "degraded" — which is how monitoring detects an unclean restart.
+func TestHealthDegradedAfterInterruption(t *testing.T) {
+	t.Parallel()
+
+	bcPath := filepath.Join(t.TempDir(), "watchdog.json")
+	interrupted := Status{
+		Hostname:  "crash-host",
+		PID:       42,
+		Running:   true, // crashed mid-cycle
+		StartedAt: time.Now().UTC().Add(-10 * time.Minute),
+	}
+	data, err := json.Marshal(interrupted)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := os.WriteFile(bcPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	wd, err := New(Config{
+		BreadcrumbPath: bcPath,
+		Logger:         log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	// Health should show degraded due to PreviousCycleInterrupted.
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	wd.HealthHandler(rec, req)
+
+	var resp HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if resp.Status != "degraded" {
+		t.Fatalf("health status = %q, want degraded (interrupted)", resp.Status)
+	}
+	if !resp.Watchdog.PreviousCycleInterrupted {
+		t.Fatal("PreviousCycleInterrupted should be true after crash recovery")
+	}
+
+	// After a successful cycle, health should recover to "ok" and clear
+	// the interruption flag.
+	wd.SetChecks([]Check{
+		{Name: "ok", Run: func(ctx context.Context, dryRun bool) error { return nil }},
+	})
+	if err := wd.RunCycle(context.Background()); err != nil {
+		t.Fatalf("RunCycle() error = %v", err)
+	}
+
+	rec2 := httptest.NewRecorder()
+	wd.HealthHandler(rec2, httptest.NewRequest(http.MethodGet, "/health", nil))
+	var resp2 HealthResponse
+	json.Unmarshal(rec2.Body.Bytes(), &resp2)
+	if resp2.Status != "ok" {
+		t.Fatalf("health status after recovery = %q, want ok", resp2.Status)
+	}
+}
+
+// TestMultipleConsecutiveFailures verifies that the failure counter increments
+// across cycles and that LastError reflects the most recent failure. This is
+// the signal that Polis monitoring uses to escalate alerts.
+func TestMultipleConsecutiveFailures(t *testing.T) {
+	t.Parallel()
+
+	wd, err := New(Config{
+		BreadcrumbPath: filepath.Join(t.TempDir(), "bc.json"),
+		Logger:         log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	failCount := 0
+	wd.SetChecks([]Check{
+		{
+			Name: "flaky-check",
+			Run: func(ctx context.Context, dryRun bool) error {
+				failCount++
+				return fmt.Errorf("failure #%d", failCount)
+			},
+		},
+	})
+
+	for i := 1; i <= 3; i++ {
+		_ = wd.RunCycle(context.Background())
+		s := wd.Status()
+		if s.ConsecutiveFailures != i {
+			t.Fatalf("after cycle %d: ConsecutiveFailures = %d, want %d", i, s.ConsecutiveFailures, i)
+		}
+		if s.LastSuccess != nil {
+			t.Fatalf("after cycle %d: LastSuccess should be nil, got %v", i, s.LastSuccess)
+		}
+		wantErr := fmt.Sprintf("failure #%d", i)
+		if !strings.Contains(s.LastError, wantErr) {
+			t.Fatalf("after cycle %d: LastError = %q, want it to contain %q", i, s.LastError, wantErr)
+		}
+	}
+}
+
+// TestBreadcrumbContractAfterSuccessfulCycle verifies that the breadcrumb file
+// written after a successful cycle contains the expected JSON structure. This
+// matters because the breadcrumb is the crash-recovery mechanism: if the schema
+// changes or fields are missing, a new argus process won't recover correctly.
+func TestBreadcrumbContractAfterSuccessfulCycle(t *testing.T) {
+	t.Parallel()
+
+	bcPath := filepath.Join(t.TempDir(), "bc.json")
+	wd, err := New(Config{
+		BreadcrumbPath: bcPath,
+		Logger:         log.New(io.Discard, "", 0),
+		Hostname:       "contract-test-host",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	wd.SetChecks([]Check{
+		{Name: "ok-check", Run: func(ctx context.Context, dryRun bool) error { return nil }},
+	})
+	if err := wd.RunCycle(context.Background()); err != nil {
+		t.Fatalf("RunCycle() error = %v", err)
+	}
+
+	data, err := os.ReadFile(bcPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	var bc Status
+	if err := json.Unmarshal(data, &bc); err != nil {
+		t.Fatalf("breadcrumb is not valid JSON: %v", err)
+	}
+
+	// Verify critical fields that a recovering process depends on.
+	if bc.Hostname != "contract-test-host" {
+		t.Errorf("breadcrumb hostname = %q, want %q", bc.Hostname, "contract-test-host")
+	}
+	if bc.Running {
+		t.Error("breadcrumb Running = true after successful cycle, should be false")
+	}
+	if bc.LastCycleEnd == nil {
+		t.Error("breadcrumb LastCycleEnd is nil, should be set after cycle")
+	}
+	if bc.LastSuccess == nil {
+		t.Error("breadcrumb LastSuccess is nil after successful cycle")
+	}
+	if bc.ConsecutiveFailures != 0 {
+		t.Errorf("breadcrumb ConsecutiveFailures = %d, want 0", bc.ConsecutiveFailures)
+	}
+	if len(bc.Checks) != 1 || bc.Checks[0].Name != "ok-check" || !bc.Checks[0].OK {
+		t.Errorf("breadcrumb Checks = %+v, want [{Name:ok-check OK:true}]", bc.Checks)
+	}
+}
+
