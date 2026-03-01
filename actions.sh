@@ -43,6 +43,8 @@ ARGUS_BEAD_REPEAT_THRESHOLD="${ARGUS_BEAD_REPEAT_THRESHOLD:-3}"
 validate_int_env "ARGUS_BEAD_REPEAT_THRESHOLD" 1 100
 ARGUS_BEAD_REPEAT_WINDOW_SECONDS="${ARGUS_BEAD_REPEAT_WINDOW_SECONDS:-86400}"
 validate_int_env "ARGUS_BEAD_REPEAT_WINDOW_SECONDS" 60 604800
+ARGUS_BOOT_GRACE_SECONDS="${ARGUS_BOOT_GRACE_SECONDS:-120}"
+validate_int_env "ARGUS_BOOT_GRACE_SECONDS" 0 600
 ARGUS_DEDUP_FILE="${ARGUS_DEDUP_FILE:-$ARGUS_STATE_DIR/dedup.json}"
 ARGUS_DEDUP_WINDOW="${ARGUS_DEDUP_WINDOW:-3600}"
 validate_int_env "ARGUS_DEDUP_WINDOW" 60 86400
@@ -183,6 +185,54 @@ action_has_automatic_remediation() {
     esac
 }
 
+system_uptime_seconds() {
+    local uptime_str
+    uptime_str=$(cut -d' ' -f1 /proc/uptime 2>/dev/null) || echo 9999 # REASON: missing /proc/uptime (containers) should assume long uptime.
+    # Truncate to integer (uptime may be fractional like 123.45)
+    printf '%.0f\n' "$uptime_str" 2>/dev/null || echo 9999
+}
+
+in_boot_grace_period() {
+    local uptime
+    uptime=$(system_uptime_seconds)
+    (( uptime < ARGUS_BOOT_GRACE_SECONDS ))
+}
+
+find_open_service_bead() {
+    local service_name="${1:-}"
+    [[ -n "$service_name" ]] || return 1
+
+    if ! command -v br >/dev/null 2>&1; then # REASON: bead operations must be no-ops when br is not installed.
+        return 1
+    fi
+
+    local search_json
+    search_json=$(cd "$ARGUS_BEADS_WORKDIR" && br search '' \
+        --label "service:${service_name}" \
+        --label "status:fail" \
+        --status open \
+        --json 2>/dev/null || echo "[]") # REASON: transient br failures should not break monitoring.
+    jq -r '.[0].id // empty' <<< "$search_json" 2>/dev/null || true
+}
+
+close_service_bead() {
+    local service_name="${1:-}"
+    [[ -n "$service_name" ]] || return 0
+
+    if ! command -v br >/dev/null 2>&1; then # REASON: bead operations must be no-ops when br is not installed.
+        return 0
+    fi
+
+    local bead_id
+    bead_id=$(find_open_service_bead "$service_name")
+    if [[ -n "$bead_id" ]]; then
+        cd "$ARGUS_BEADS_WORKDIR" && br close "$bead_id" \
+            --reason "Service ${service_name} recovered" \
+            2>/dev/null || true # REASON: close failures should not break monitoring.
+        echo "$bead_id"
+    fi
+}
+
 find_open_bead_for_problem_key() {
     local problem_key="${1:-}"
     [[ -n "$problem_key" ]] || return 1
@@ -205,9 +255,20 @@ create_bead() {
     local action_result="${5:-unknown}"
     local problem_key="${6:-}"
     local seen_count="${7:-1}"
+    local service_name="${8:-}"
 
     if ! command -v br >/dev/null 2>&1; then # REASON: br integration is optional and should degrade gracefully.
         return 0
+    fi
+
+    # For service beads, use label-based dedup (more reliable than description text matching)
+    if [[ -n "$service_name" ]]; then
+        local existing_service_id
+        existing_service_id=$(find_open_service_bead "$service_name" || true) # REASON: lookup failures should fall back to attempting creation.
+        if [[ -n "$existing_service_id" ]]; then
+            echo "$existing_service_id"
+            return 0
+        fi
     fi
 
     local existing_id
@@ -235,10 +296,16 @@ Problem key: ${problem_key}
 EOF
 )
 
+    # Build labels: always include 'argus'; add service-specific labels for service beads
+    local labels="argus"
+    if [[ -n "$service_name" ]]; then
+        labels="argus,service:${service_name},status:fail"
+    fi
+
     bead_id=$(cd "$ARGUS_BEADS_WORKDIR" && br create "$title" \
         -d "$body" \
         --priority "$ARGUS_BEAD_PRIORITY" \
-        --labels argus \
+        --labels "$labels" \
         --silent 2>/dev/null) || true # REASON: creation failures should not fail Argus monitoring cycles.
 
     bead_id=$(echo "$bead_id" | tr -d '[:space:]')
@@ -882,15 +949,23 @@ execute_action() {
     local seen_count=1
     local should_create_bead=false
     local bead_id=""
+    local service_name=""
 
     case "$action_type" in
         restart_service)
             problem_type="service"
             severity="warning"
+            service_name="$target"
             description="Service action for ${target}: ${reason}"
             local restart_rc=0
             if action_restart_service "$target" "$reason"; then
                 restart_rc=0
+                # AUTO-RESOLVE: service recovered — close any open fail bead
+                local resolved_id
+                resolved_id=$(close_service_bead "$target" || true) # REASON: close failures should not affect success path.
+                if [[ -n "$resolved_id" ]]; then
+                    echo "Auto-resolved bead $resolved_id (service ${target} recovered)"
+                fi
             else
                 restart_rc=$?
                 case "$restart_rc" in
@@ -912,6 +987,12 @@ execute_action() {
                     action_failed=true
                     ;;
                 esac
+            fi
+            # BOOT GRACE: skip bead creation for transient startup failures
+            if [[ "$action_failed" == "true" ]] && in_boot_grace_period; then
+                should_create_bead=false
+                action_result="boot-grace"
+                echo "Boot grace: skipping bead for ${target} (uptime < ${ARGUS_BOOT_GRACE_SECONDS}s)"
             fi
             ;;
         kill_pid)
@@ -1009,18 +1090,20 @@ execute_action() {
         seen_count=$((recurrence_count + 1))
     fi
 
-    if [[ "$action_result" == "failure" ]]; then
-        should_create_bead=true
-    fi
-    if (( seen_count >= ARGUS_BEAD_REPEAT_THRESHOLD )); then
-        should_create_bead=true
-    fi
-    if ! action_has_automatic_remediation "$action_type"; then
-        should_create_bead=true
+    if [[ "$action_result" != "boot-grace" ]]; then
+        if [[ "$action_result" == "failure" ]]; then
+            should_create_bead=true
+        fi
+        if (( seen_count >= ARGUS_BEAD_REPEAT_THRESHOLD )); then
+            should_create_bead=true
+        fi
+        if ! action_has_automatic_remediation "$action_type"; then
+            should_create_bead=true
+        fi
     fi
 
     if [[ "$should_create_bead" == "true" ]]; then
-        bead_id=$(create_bead "$problem_type" "$description" "$severity" "$action_taken" "$action_result" "$problem_key" "$seen_count")
+        bead_id=$(create_bead "$problem_type" "$description" "$severity" "$action_taken" "$action_result" "$problem_key" "$seen_count" "$service_name")
     fi
 
     log_problem "$severity" "$problem_type" "$description" "$action_taken" "$action_result" "$bead_id" || true # REASON: action execution result should return even if registry append fails.

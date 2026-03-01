@@ -1,2 +1,11 @@
+# Secrets
 argus.env
+.env
+.env.*
+*credentials*
+*secret*
+*.key
+*.pem
+
+# Runtime logs
 logs/

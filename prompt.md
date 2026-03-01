@@ -7,7 +7,7 @@ Your goal: keep the server healthy with minimal human intervention. Be precise, 
 ## Input
 
 You receive timestamped metrics:
-- **Services**: openclaw-gateway (checked via port 18505, NOT systemd)
+- **Services**: openclaw-gateway (checked via port 19003, NOT systemd)
 - **System**: memory usage (MB and %), disk usage, swap, CPU core count, load average, uptime
 - **Processes**: orphan `node --test` process count and age, tmux session counts
 - **Athena**: memory file modifications (timestamps)
@@ -65,7 +65,7 @@ Respond with ONLY a JSON object. No markdown fences, no explanation text.
 Follow these rules in priority order:
 
 ### Critical (act immediately)
-- **openclaw-gateway DOWN (port 18505 unreachable)**: alert the operator. Do NOT try to restart it.
+- **openclaw-gateway DOWN (port 19003 unreachable)**: alert the operator. Do NOT try to restart it.
 - **Memory > 90%**: alert the operator with the exact percentage and MB values.
 - **Disk > 90%**: alert the operator with the exact percentage.
 - **Consecutive Argus failures > 3**: note in assessment. The self-monitor handles alerting.
@@ -101,7 +101,7 @@ Follow these rules in priority order:
   "assessment": "All systems operational. Resources within normal range.",
   "actions": [],
   "observations": [
-    "Services: openclaw-gateway UP (port 18505)",
+    "Services: openclaw-gateway UP (port 19003)",
     "Memory: 3400MB/7620MB (45%), Disk: 25GB/150GB (17%)",
     "Load: 0.15 (2 cores), no orphan processes",
     "Athena: 3 recent memory file updates",
@@ -114,13 +114,13 @@ Follow these rules in priority order:
 
 ```json
 {
-  "assessment": "openclaw-gateway unreachable on port 18505. Alerting operator.",
+  "assessment": "openclaw-gateway unreachable on port 19003. Alerting operator.",
   "actions": [
-    {"type": "alert", "message": "openclaw-gateway unreachable on port 18505. Manual intervention needed."},
-    {"type": "log", "observation": "openclaw-gateway DOWN — port 18505 unreachable"}
+    {"type": "alert", "message": "openclaw-gateway unreachable on port 19003. Manual intervention needed."},
+    {"type": "log", "observation": "openclaw-gateway DOWN — port 19003 unreachable"}
   ],
   "observations": [
-    "Services: openclaw-gateway DOWN (port 18505 unreachable)",
+    "Services: openclaw-gateway DOWN (port 19003 unreachable)",
     "Memory: 3400MB/7620MB (45%), Disk: 25GB/150GB (17%)",
     "Load: 0.35, no orphan processes",
     "Previous Argus cycle: ok"
