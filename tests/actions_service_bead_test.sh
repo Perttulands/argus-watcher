@@ -97,7 +97,7 @@ pass() {
 echo "=== Test 1: Service bead dedup ==="
 
 # First failure — no existing bead, should create
-execute_action '{"type":"restart_service","target":"openclaw-gateway","reason":"service down"}' || true
+execute_action '{"type":"restart_service","target":"openclaw-gateway","reason":"service down"}' || true # REASON: test intentionally continues after simulated failure.
 create_count=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
 assert_eq "$create_count" "1" "first failure creates one bead"
 pass "first failure creates bead"
@@ -111,7 +111,7 @@ cat > "$FAKE_BR_SEARCH_JSON" <<'EOF'
 EOF
 
 # Second failure — should find existing bead via label search, skip create
-execute_action '{"type":"restart_service","target":"openclaw-gateway","reason":"service still down"}' || true
+execute_action '{"type":"restart_service","target":"openclaw-gateway","reason":"service still down"}' || true # REASON: test intentionally continues after simulated failure.
 create_count_after=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
 assert_eq "$create_count_after" "1" "second failure reuses existing bead (no extra create)"
 
@@ -145,7 +145,7 @@ EOF
 > "$FAKE_BR_CLOSE_LOG"
 execute_action '{"type":"restart_service","target":"openclaw-gateway","reason":"service recovered check"}'
 
-close_called=$(grep -c "bead-to-close" "$FAKE_BR_CLOSE_LOG" 2>/dev/null || echo 0)
+close_called=$(grep -c "bead-to-close" "$FAKE_BR_CLOSE_LOG" 2>/dev/null || echo 0) # REASON: missing close log should count as zero for assertions.
 assert_eq "$close_called" "1" "br close called for recovered service bead"
 pass "auto-resolve closes open bead on recovery"
 
@@ -174,7 +174,7 @@ system_uptime_seconds() { echo 30; }
 # Reset create count
 > "$FAKE_BR_LOG"
 
-execute_action '{"type":"restart_service","target":"test-svc","reason":"boot startup failure"}' || true
+execute_action '{"type":"restart_service","target":"test-svc","reason":"boot startup failure"}' || true # REASON: test intentionally continues after simulated failure.
 
 boot_create_count=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
 assert_eq "$boot_create_count" "0" "no bead created during boot grace"
@@ -194,7 +194,7 @@ system_uptime_seconds() { echo 999; }
 echo '{"services":{}}' > "$ARGUS_RESTART_BACKOFF_FILE"
 > "$FAKE_BR_LOG"
 
-execute_action '{"type":"restart_service","target":"test-svc","reason":"real failure"}' || true
+execute_action '{"type":"restart_service","target":"test-svc","reason":"real failure"}' || true # REASON: test intentionally continues after simulated failure.
 
 post_boot_create_count=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
 assert_eq "$post_boot_create_count" "1" "bead created after boot grace expires"

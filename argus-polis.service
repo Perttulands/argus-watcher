@@ -2,7 +2,7 @@
 Description=Argus Ops Watchdog
 After=network-online.target
 Wants=network-online.target
-Documentation=https://github.com/perttu/argus
+Documentation=https://github.com/Perttulands/argus-watcher
 
 [Service]
 Type=simple

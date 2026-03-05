@@ -46,7 +46,7 @@ _Quick pass: dead code, bugs, missing error handling, doc/code inconsistencies, 
 
 - **`install.sh` likely still references paths or services removed in `815be6a`** — not re-verified post-cleanup, but the commit touched `install.sh` for path fixes; worth checking if any `mcp-agent-mail` references survived.
 
-- **Go module path is `github.com/perttu/argus`** (`go.mod`) but the repo is hosted privately. The module path is fine for local use but would need updating if published.
+- **Go module path updated to `github.com/Perttulands/argus-watcher`** (`go.mod`) — matches the published GitHub repo name.
 
 - **`IMPROVEMENTS.md` is written as future work** but is committed as a tracked file with no indication of which items have been actioned. Items 1–5 are all open. The Go watchdog (Improvement #2) was partially implemented but not wired up.
 

@@ -2,7 +2,7 @@
 Description=Argus Ops Watchdog
 After=network-online.target
 Wants=network-online.target
-Documentation=https://github.com/perttu/argus
+Documentation=https://github.com/Perttulands/argus-watcher
 
 [Service]
 Type=simple
@@ -26,7 +26,7 @@ TimeoutStopSec=30
 
 # Security hardening
 NoNewPrivileges=true
-PrivateTmp=true
+PrivateTmp=false
 ProtectSystem=strict
 ProtectHome=false
 ReadWritePaths=/home/polis/tools/argus/logs /home/polis/tools/argus/state /home/polis/agents/athena/workspace

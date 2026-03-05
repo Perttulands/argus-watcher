@@ -189,9 +189,24 @@ When Relay is available, Argus also publishes structured problem events to Athen
 - Sender: `ARGUS_RELAY_FROM` (default: `argus`)
 
 If Relay is unavailable, Argus appends the same event JSON to:
-- `ARGUS_RELAY_FALLBACK_FILE` (default: `~/athena/state/argus/relay-fallback.jsonl`)
+- `ARGUS_RELAY_FALLBACK_FILE` (default: `state/relay-fallback.jsonl`)
 
 This keeps Argus operational even during Relay outages.
+
+Observations logged via the `log` action are written to:
+- `ARGUS_OBSERVATIONS_FILE` (default: `state/observations.md`)
+
+To fetch recent observations without direct file access:
+
+```bash
+scripts/relay-observations.sh
+```
+
+Behavior:
+
+- Sends `argus.observations.snapshot` to Relay when available
+- Falls back to `state/relay-observations-fallback.jsonl` when Relay is unavailable
+- Includes a bounded markdown snapshot from `state/observations.md` (default last 50 lines)
 
 For daily health summaries, use:
 
