@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -32,7 +34,7 @@ func TestEnvOrDefault_Unset(t *testing.T) {
 func TestRunOnceSucceeds(t *testing.T) {
 	bc := filepath.Join(t.TempDir(), "bc.json")
 	withArgs([]string{"argus", "--once", "--dry-run", "--health-addr=", "--breadcrumb-file=" + bc}, func() {
-		if err := run(log.New(io.Discard, "", 0)); err != nil {
+		if err := run(context.Background(), log.New(io.Discard, "", 0)); err != nil {
 			t.Fatalf("run() error = %v", err)
 		}
 	})
@@ -41,7 +43,7 @@ func TestRunOnceSucceeds(t *testing.T) {
 func TestRunOnceWithHealthServer(t *testing.T) {
 	bc := filepath.Join(t.TempDir(), "bc.json")
 	withArgs([]string{"argus", "--once", "--dry-run", "--health-addr=127.0.0.1:0", "--breadcrumb-file=" + bc}, func() {
-		if err := run(log.New(io.Discard, "", 0)); err != nil {
+		if err := run(context.Background(), log.New(io.Discard, "", 0)); err != nil {
 			t.Fatalf("run() error = %v", err)
 		}
 	})
@@ -49,15 +51,15 @@ func TestRunOnceWithHealthServer(t *testing.T) {
 
 func TestRunHelpExitsCleanly(t *testing.T) {
 	withArgs([]string{"argus", "--help"}, func() {
-		if err := run(log.New(io.Discard, "", 0)); err != nil {
-			t.Fatalf("run(--help) error = %v", err)
+		if err := run(context.Background(), log.New(io.Discard, "", 0)); !errors.Is(err, errHelpRequested) {
+			t.Fatalf("run(--help) error = %v, want errHelpRequested", err)
 		}
 	})
 }
 
 func TestRunInvalidFlagErrors(t *testing.T) {
 	withArgs([]string{"argus", "--nonexistent-flag"}, func() {
-		err := run(log.New(io.Discard, "", 0))
+		err := run(context.Background(), log.New(io.Discard, "", 0))
 		if err == nil {
 			t.Fatal("run() should fail with invalid flag")
 		}
@@ -69,7 +71,7 @@ func TestRunInvalidFlagErrors(t *testing.T) {
 
 func TestRunFailsOnEmptyBreadcrumb(t *testing.T) {
 	withArgs([]string{"argus", "--once", "--health-addr=", "--breadcrumb-file="}, func() {
-		err := run(log.New(io.Discard, "", 0))
+		err := run(context.Background(), log.New(io.Discard, "", 0))
 		if err == nil {
 			t.Fatal("run() should fail with empty breadcrumb path")
 		}

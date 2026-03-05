@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "ERROR: collectors.sh failed at line $LINENO" >&2' ERR
 
 # collectors.sh — metric collection functions for Argus
 #

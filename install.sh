@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "ERROR: install.sh failed at line $LINENO" >&2' ERR
 
 # install.sh — Install Argus as a systemd service
 # Idempotent — safe to re-run to update configuration.
@@ -13,7 +14,7 @@ SYSTEMD_DIR="/etc/systemd/system"
 ARGUS_ENV_DIR="/etc/argus"
 SYSTEM_ENV_FILE="${ARGUS_ENV_DIR}/argus.env"
 ENV_FILE="${SCRIPT_DIR}/argus.env"
-ARGUS_STATE_DIR="${ARGUS_STATE_DIR:-$HOME/athena/state/argus}"
+ARGUS_STATE_DIR="${ARGUS_STATE_DIR:-${SCRIPT_DIR}/state}"
 
 echo "===== Argus Installation ====="
 echo ""
@@ -76,7 +77,7 @@ cat > "$SERVICE_FILE" <<UNIT_EOF
 Description=Argus Ops Watchdog
 After=network-online.target
 Wants=network-online.target
-Documentation=https://github.com/perttu/argus
+Documentation=https://github.com/Perttulands/argus-watcher
 
 [Service]
 Type=simple

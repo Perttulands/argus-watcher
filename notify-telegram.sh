@@ -4,6 +4,7 @@
 # Sources argus.env for bot token and chat ID.
 
 set -euo pipefail
+trap 'echo "ERROR: notify-telegram.sh failed at line $LINENO" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/argus.env"
@@ -23,7 +24,7 @@ if [[ -z "$MESSAGE" ]]; then
 fi
 
 # Prepend hostname
-HOSTNAME_TAG=$(hostname -f 2>/dev/null || hostname)
+HOSTNAME_TAG=$(hostname -f 2>/dev/null || hostname) # REASON: fallback to short hostname when FQDN lookup fails.
 MESSAGE="[${HOSTNAME_TAG}] ${MESSAGE}"
 
 if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]] || [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
@@ -40,7 +41,7 @@ PAYLOAD=$(jq -n \
 HTTP_CODE=$(curl -s -m 10 -w '%{http_code}' -o /dev/null -X POST \
     "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
     -H "Content-Type: application/json" \
-    -d "$PAYLOAD" 2>/dev/null) || true
+    -d "$PAYLOAD" 2>/dev/null) || true # REASON: notification failure must not block lifecycle hooks.
 
 if [[ "$HTTP_CODE" == "200" ]]; then
     echo "Telegram notification sent"

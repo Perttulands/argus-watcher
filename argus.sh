@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "ERROR: argus.sh failed at line $LINENO" >&2' ERR
 
 # argus.sh — main monitoring loop for Argus ops watchdog
 # Runs as a systemd service, collecting metrics every cycle and using

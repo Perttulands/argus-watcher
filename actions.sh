@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "ERROR: actions.sh failed at line $LINENO" >&2' ERR
 
 # actions.sh — ONLY allowlisted actions that Argus LLM can execute
 #
@@ -32,10 +33,11 @@ ARGUS_RELAY_TO="${ARGUS_RELAY_TO:-athena}"
 ARGUS_RELAY_FROM="${ARGUS_RELAY_FROM:-argus}"
 ARGUS_RELAY_TIMEOUT="${ARGUS_RELAY_TIMEOUT:-5}"
 validate_int_env "ARGUS_RELAY_TIMEOUT" 1 300
-ARGUS_RELAY_FALLBACK_FILE="${ARGUS_RELAY_FALLBACK_FILE:-$HOME/athena/state/argus/relay-fallback.jsonl}"
 ACTIONS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARGUS_STATE_DIR="${ARGUS_STATE_DIR:-${SCRIPT_DIR:-$ACTIONS_DIR}/state}"
+ARGUS_RELAY_FALLBACK_FILE="${ARGUS_RELAY_FALLBACK_FILE:-$ARGUS_STATE_DIR/relay-fallback.jsonl}"
 ARGUS_PROBLEMS_FILE="${ARGUS_PROBLEMS_FILE:-$ARGUS_STATE_DIR/problems.jsonl}"
+ARGUS_OBSERVATIONS_FILE="${ARGUS_OBSERVATIONS_FILE:-$ARGUS_STATE_DIR/observations.md}"
 ARGUS_BEADS_WORKDIR="${ARGUS_BEADS_WORKDIR:-$HOME/athena/workspace}"
 ARGUS_BEAD_PRIORITY="${ARGUS_BEAD_PRIORITY:-2}"
 validate_int_env "ARGUS_BEAD_PRIORITY" 0 4
@@ -189,7 +191,7 @@ system_uptime_seconds() {
     local uptime_str
     uptime_str=$(cut -d' ' -f1 /proc/uptime 2>/dev/null) || echo 9999 # REASON: missing /proc/uptime (containers) should assume long uptime.
     # Truncate to integer (uptime may be fractional like 123.45)
-    printf '%.0f\n' "$uptime_str" 2>/dev/null || echo 9999
+    printf '%.0f\n' "$uptime_str" 2>/dev/null || echo 9999 # REASON: malformed uptime string should degrade to conservative long-uptime behavior.
 }
 
 in_boot_grace_period() {
@@ -226,9 +228,14 @@ close_service_bead() {
     local bead_id
     bead_id=$(find_open_service_bead "$service_name")
     if [[ -n "$bead_id" ]]; then
-        cd "$ARGUS_BEADS_WORKDIR" && br close "$bead_id" \
-            --reason "Service ${service_name} recovered" \
-            2>/dev/null || true # REASON: close failures should not break monitoring.
+        if ! (
+            cd "$ARGUS_BEADS_WORKDIR" &&
+                br close "$bead_id" \
+                    --reason "Service ${service_name} recovered" \
+                    2>/dev/null # REASON: close failures are non-fatal and should not block watchdog flow.
+        ); then
+            : # REASON: close failures should not break monitoring.
+        fi
         echo "$bead_id"
     fi
 }
@@ -607,7 +614,7 @@ action_alert() {
 
 action_log() {
     local observation="$1"
-    local log_file="${ARGUS_OBSERVATIONS_FILE:-$HOME/athena/state/argus/observations.md}"
+    local log_file="$ARGUS_OBSERVATIONS_FILE"
     local log_dir
     log_dir=$(dirname "$log_file")
 
@@ -838,7 +845,7 @@ action_clean_disk() {
 }
 
 # Auto-kill orphan node --test processes after repeated detection
-ORPHAN_STATE_FILE="${ARGUS_ORPHAN_STATE:-$HOME/athena/state/argus-orphans.json}"
+ORPHAN_STATE_FILE="${ARGUS_ORPHAN_STATE:-$ARGUS_STATE_DIR/argus-orphans.json}"
 ORPHAN_KILL_THRESHOLD=3
 
 action_check_and_kill_orphan_tests() {
