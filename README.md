@@ -1,6 +1,6 @@
 # 👁️ Argus
 
-![Argus](images/argus.jpg)
+![Argus Banner](banner.png)
 
 *One red eye. Spiked collar. Zero chill.*
 
