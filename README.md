@@ -1,8 +1,12 @@
-# 👁️ Argus
+# Argus
 
 ![Argus Banner](banner.png)
 
 *One red eye. Spiked collar. Zero chill.*
+
+---
+
+Argus is a server watchdog. Every five minutes it collects system metrics — CPU, memory, disk, swap, processes, service health — sends them to Claude Haiku, and lets the model pick from a short list of safe actions. It can restart a service, kill a runaway process, clean stale temp files, or send you a Telegram alert. That's it. No arbitrary shell execution, no creative freedom, no surprises. The LLM decides *what* to do; the code decides *what's allowed*. If you run autonomous agents on a Linux box and want something watching the host while you sleep, this is that something.
 
 ---
 
@@ -12,49 +16,106 @@ Our Argus has the same energy, except instead of waiting on a porch he patrols a
 
 You don't want your ops watchdog to be creative. You want it to be correct, boring, and slightly terrifying. Argus is all three.
 
+---
+
 ## How It Works
 
 ```
-Every 5 minutes:
+Every ARGUS_INTERVAL seconds (default 300):
   collect metrics → ask Claude Haiku what to do → do it → log it → go back to sleep
 ```
 
-Argus collects system metrics (CPU, memory, disk, swap, processes, service health), sends them to an LLM with a decision-making prompt, and acts on the response. The LLM can only execute **5 allowlisted actions**. That's it. There's no `exec("arbitrary shell command")` hiding in here. Argus is on a leash in exactly one way.
+Argus collects system metrics (CPU, memory, disk, swap, processes, service health), sends them to an LLM with a decision-making prompt, and acts on the response. The LLM can only execute **6 allowlisted actions**. That's it. There's no `exec("arbitrary shell command")` hiding in here.
 
 | Action | What It Does | Guardrail |
 |--------|-------------|-----------|
-| `restart_service` | Restarts a service | Must be in explicit allowlist |
-| `kill_pid` | Kills a process | Must match `node\|claude\|codex` |
+| `restart_service` | Restarts a service | Must be in explicit `ALLOWED_SERVICES` allowlist |
+| `kill_pid` | Kills a process | Must be numeric PID; must match `node\|claude\|codex` |
 | `kill_tmux` | Kills a tmux session | Name sanitized against injection |
 | `clean_disk` | Cleans old files from safe temp/cache/archive paths | Hardcoded safelist only (`/tmp`, `/var/tmp`, selected `~/.cache`, log archives) |
 | `alert` | Sends a Telegram notification | Retry on failure, hostname prepended |
 | `log` | Records an observation | Auto-escalates after 3 consecutive repeats |
 
-Orphan `node --test` processes are auto-killed **deterministically** after 3 detections. No LLM involved. Some things don't need AI. They need a cron job with teeth.
+Orphan `node --test` processes are auto-killed **deterministically** after 3 consecutive detections. No LLM involved. Some things don't need AI.
+
+---
+
+## Two Runtimes
+
+This repo contains two independent runtimes:
+
+### 1. Bash production loop (`argus.sh`)
+
+The main monitoring system. Runs every `ARGUS_INTERVAL` seconds, collects metrics, calls Claude Haiku, and executes allowlisted actions.
+
+```bash
+./argus.sh           # loop forever
+./argus.sh --once    # single cycle then exit
+```
+
+### 2. Go watchdog binary (`cmd/argus`)
+
+A separate Go-based watchdog with its own CLI, breadcrumb state persistence, and HTTP health endpoint. The default checks in the current build are placeholders — no production actions are wired in the Go binary by default.
+
+```
+argus [flags]
+
+Flags:
+  --breadcrumb-file <path>   Breadcrumb state file (default: logs/watchdog.breadcrumb.json)
+  --health-addr <addr>       Health server bind address; empty disables it (default: :8080 or ARGUS_HEALTH_ADDR)
+  --interval <duration>      Watchdog cycle interval (default: 5m)
+  --once                     Run one cycle and exit
+  --dry-run                  Log intended actions, skip execution
+```
+
+HTTP endpoint (Go binary only):
+
+| Endpoint | Method | Response |
+|----------|--------|----------|
+| `GET /health` | Returns `{"status":"ok"\|"degraded","watchdog":{...}}` |
+
+Status is `degraded` when `PreviousCycleInterrupted=true` or `ConsecutiveFailures>0`.
+
+---
 
 ## Components
 
 | File | What it does |
 |------|-------------|
-| `argus.sh` | The main loop. Metrics → LLM → actions → logs. |
-| `collectors.sh` | Gathers everything: services, system stats, processes, agents |
-| `actions.sh` | The 5 actions. Validated. Sanitized. Paranoid. |
-| `prompt.md` | Argus's brain. Edit this to change what he cares about. |
+| `argus.sh` | Main loop: metrics → LLM → actions → logs |
+| `collectors.sh` | Gathers services, system stats, processes, agents, memory hog context |
+| `actions.sh` | 6 allowlisted actions with validation, backoff, dedup, bead integration |
+| `prompt.md` | LLM decision contract and action schema. Edit this to change what Argus cares about. |
 | `argus.service` | Systemd unit with resource limits and security hardening |
-| `install.sh` | Idempotent. Run it twice, nothing breaks. |
+| `install.sh` | Idempotent installer. Run it twice, nothing breaks. |
+| `notify-telegram.sh <message>` | One-shot Telegram ops message sender |
+
+### Operational Scripts
+
+| Script | Description |
+|--------|-------------|
+| `scripts/argus-stats.sh [output_file]` | Export dashboard JSON from `problems.jsonl` |
+| `scripts/pattern-analysis.sh` | Build `state/pattern-analysis.json` from problem history |
+| `scripts/pattern-detect.sh` | Create one daily pattern bead per new signature |
+| `scripts/relay-observations.sh` | Send recent observation snapshot to Relay (fallback to JSONL) |
+| `scripts/relay-summary.sh` | Send daily summary to Relay (fallback to Telegram or JSONL) |
+
+---
 
 ## Install
 
 ```bash
-git clone https://github.com/Perttulands/argus.git
-cd argus
+git clone https://github.com/Perttulands/argus-watcher.git
+cd argus-watcher
 cp argus.env.example argus.env
-# Edit argus.env: ANTHROPIC_API_KEY (required), TELEGRAM_BOT_TOKEN + CHAT_ID (optional)
+# Edit argus.env: set ANTHROPIC_API_KEY (required), TELEGRAM_BOT_TOKEN + CHAT_ID (optional)
 chmod +x install.sh
 ./install.sh
 ```
 
 No compiler. No runtime. No package manager existential crisis. It's bash scripts and an API key.
+
+---
 
 ## Usage
 
@@ -66,38 +127,66 @@ source argus.env && ./argus.sh --once
 sudo systemctl start argus
 
 # Watch him work
-tail -f ~/argus/logs/argus.log
+tail -f logs/argus.log
 
-# See his last decision (what he did and why)
-cat ~/argus/logs/last_response.json | jq
+# See his last decision
+cat logs/last_response.json | jq
 
 # Service management
 sudo systemctl start|stop|restart|status argus
 ```
 
+---
+
+## Current Status
+
+What works, what doesn't.
+
+- ✅ Bash production loop — stable, running in production since February 2026
+- ✅ All 6 allowlisted actions — validated, sanitized, tested
+- ✅ Problem registry and alert deduplication
+- ✅ Restart backoff with persistent per-service state
+- ✅ Orphan process deterministic kill (no LLM needed)
+- ✅ Bead lifecycle automation (create, dedup, auto-close)
+- ✅ Relay integration with graceful fallback to JSONL
+- ✅ Pattern analysis and daily bead summaries
+- ✅ Telegram alerting with retry
+- ✅ systemd deployment with security hardening
+- ✅ Shell and Go test suites
+- ⚠️ Go watchdog binary — builds and runs, but default checks are placeholders. No production actions wired yet.
+- ⚠️ `ALLOWED_SERVICES` is empty by default — you must populate it to permit `restart_service`
+- ⚠️ Requires `claude` CLI with valid API key — no fallback LLM path
+
+---
+
 ## Security
 
 No arbitrary command execution. Every input is validated like it's trying to escape.
 
-- PIDs: must be numeric, must exist, must match allowed process names
-- Services: explicit allowlist only
-- Tmux names: sanitized against injection
+- PIDs: must be numeric, must exist, must match allowed process names (`node|claude|codex`)
+- Services: explicit `ALLOWED_SERVICES` allowlist only (empty by default — must be populated to permit restarts)
+- Tmux names: sanitized against injection (`[a-zA-Z0-9._-]` only)
 - Telegram payloads: built with `jq`, not string concatenation
 - systemd: `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, `MemoryMax=1G`
+
+---
 
 ## Reliability
 
 - Log rotation at 10MB (3 backups)
-- Disk space guard — skips LLM call if < 100MB free
-- Self-monitoring — alerts after 3 consecutive failures
-- Clean shutdown on SIGTERM/SIGINT
+- Disk space guard — skips LLM call if root filesystem `< 100MB` free; sends emergency alert
+- Self-monitoring — escalates after 3 consecutive cycle failures
+- Boot grace period — suppresses service restart failure beads during `ARGUS_BOOT_GRACE_SECONDS` (default 120s)
+- Clean shutdown on `SIGTERM`/`SIGINT`
 - JSON state via `jq` (no injection from error messages)
+
+---
 
 ## Problem Registry
 
 Argus records detected problems to `state/problems.jsonl` (override with `ARGUS_PROBLEMS_FILE`).
 
-Each line is a JSON object with this schema:
+Each line is a JSON object:
 
 ```json
 {
@@ -118,38 +207,40 @@ Quick validation:
 jq -c . state/problems.jsonl >/dev/null
 ```
 
+---
+
 ## Auto Bead Creation
 
 Argus creates or reuses beads when an issue needs human attention:
 
 - Action failed (`action_result: failure`)
-- Same problem recurs at least 3 times in 24h
+- Same problem recurs at least `ARGUS_BEAD_REPEAT_THRESHOLD` times (default 3) within `ARGUS_BEAD_REPEAT_WINDOW_SECONDS` (default 86400)
 - Problem has no automatic remediation path (for example, `alert`/`log`)
 
 Behavior:
 
 - Command used: `br create "[argus] <type>: <description>" ...`
 - Open-bead dedup key: `Problem key: <type>:<description_sha256_16>`
-- If `br` is unavailable, Argus skips bead creation and continues monitoring.
+- If `br` is unavailable, Argus skips bead creation and continues monitoring
+
+---
 
 ## Alert Deduplication
 
-Argus suppresses repeat alerts for the same problem key (`<type>:<description_sha256_16>`)
-within `ARGUS_DEDUP_WINDOW` seconds (default `3600`).
+Argus suppresses repeat alerts for the same problem key (`<type>:<description_sha256_16>`) within `ARGUS_DEDUP_WINDOW` seconds (default `3600`).
 
-Suppression state is kept in `state/dedup.json` and old keys are compacted automatically.
-Suppressed repeats are still written to `state/problems.jsonl` with `action_result: suppressed`.
+Suppression state is kept in `state/dedup.json` and old keys are compacted automatically. Suppressed repeats are still written to `state/problems.jsonl` with `action_result: suppressed`.
+
+---
 
 ## Memory Hog Identification
 
 When memory is critical, Argus enriches alerts and problem records with:
 
-- process name
-- PID
-- RSS (KB)
-- `%MEM`
-- runtime (`etime`)
+- process name, PID, RSS (KB), `%MEM`, runtime (`etime`)
 - kill-candidate hint (`yes` when process matches `node|claude|codex`)
+
+---
 
 ## Restart Backoff
 
@@ -158,18 +249,22 @@ When memory is critical, Argus enriches alerts and problem records with:
 - attempt 1: immediate
 - attempt 2: wait `ARGUS_RESTART_BACKOFF_SECOND_DELAY` (default 60s)
 - attempt 3: wait `ARGUS_RESTART_BACKOFF_THIRD_DELAY` (default 300s)
-- attempt 4+: mark restart loop, create/attach bead, and cooldown for `ARGUS_RESTART_COOLDOWN_SECONDS` (default 3600s)
+- attempt 4+: mark restart loop, enter cooldown for `ARGUS_RESTART_COOLDOWN_SECONDS` (default 3600s)
+
+On successful restart, attempt counters reset and any matching open service bead is auto-closed.
+
+---
 
 ## Pattern Analysis
 
 Argus includes offline pattern tooling over `state/problems.jsonl`:
 
-- `scripts/pattern-analysis.sh`: generates `state/pattern-analysis.json` with recurring restart spikes, disk-pressure trends, memory-hog recurrence, and time-correlation signals.
+- `scripts/pattern-analysis.sh`: generates `state/pattern-analysis.json`. Detects: `service_restart_spike` (≥3 restarts same day), `disk_pressure_trend` (≥3 disk events across ≥2 days), `memory_hog_recurring` (≥3 memory events for same process), `time_correlation` (≥3 problems in same UTC hour).
 - `scripts/pattern-detect.sh`: turns analysis output into one daily summary bead per signature and records emissions in `state/patterns.jsonl`.
 
-## Historical Metrics Export
+---
 
-Use `scripts/argus-stats.sh` to export dashboard-friendly JSON from `state/problems.jsonl`:
+## Historical Metrics Export
 
 ```bash
 # Print stats JSON to stdout
@@ -179,72 +274,94 @@ scripts/argus-stats.sh
 scripts/argus-stats.sh state/argus-stats.json
 ```
 
-Output includes counts by type/severity/action result, success rate, and hourly/daily buckets.
+Output includes totals, counts by type/severity/action result, success rate, and hourly/daily buckets.
 
-## Relay Problem Reports (Optional)
+---
 
-When Relay is available, Argus also publishes structured problem events to Athena:
+## Relay Integration (Optional)
+
+When Relay is available, Argus publishes structured problem events:
 - Event type: `argus.problem`
 - Route: `ARGUS_RELAY_TO` (default: `athena`)
 - Sender: `ARGUS_RELAY_FROM` (default: `argus`)
 
-If Relay is unavailable, Argus appends the same event JSON to:
-- `ARGUS_RELAY_FALLBACK_FILE` (default: `state/relay-fallback.jsonl`)
+If Relay is unavailable, events append to `ARGUS_RELAY_FALLBACK_FILE` (default: `state/relay-fallback.jsonl`).
 
-This keeps Argus operational even during Relay outages.
-
-Observations logged via the `log` action are written to:
-- `ARGUS_OBSERVATIONS_FILE` (default: `state/observations.md`)
-
-To fetch recent observations without direct file access:
+Observations logged via the `log` action are written to `ARGUS_OBSERVATIONS_FILE` (default: `state/observations.md`).
 
 ```bash
-scripts/relay-observations.sh
+scripts/relay-observations.sh    # send observation snapshot to Relay
+scripts/relay-summary.sh         # send daily summary to Relay
 ```
 
-Behavior:
+Both scripts fall back to JSONL queues when Relay is unavailable. `relay-summary.sh` optionally falls back to direct Telegram if bot credentials are configured.
 
-- Sends `argus.observations.snapshot` to Relay when available
-- Falls back to `state/relay-observations-fallback.jsonl` when Relay is unavailable
-- Includes a bounded markdown snapshot from `state/observations.md` (default last 50 lines)
+---
 
-For daily health summaries, use:
+## Configuration
 
-```bash
-scripts/relay-summary.sh
-```
+Copy `argus.env.example` to `argus.env` and edit. Key variables:
 
-Behavior:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ARGUS_INTERVAL` | `300` | Loop sleep interval (seconds) |
+| `ARGUS_GATEWAY_PORT` | `18505` | Gateway liveness probe port |
+| `ARGUS_RELAY_ENABLED` | `true` | Enable Relay publishing |
+| `ARGUS_RELAY_BIN` | `$HOME/go/bin/relay` | Relay CLI path |
+| `ARGUS_DEDUP_WINDOW` | `3600` | Alert suppression window (seconds) |
+| `ARGUS_BEAD_REPEAT_THRESHOLD` | `3` | Recurrence count for bead creation |
+| `ARGUS_RESTART_BACKOFF_SECOND_DELAY` | `60` | Delay before 2nd restart attempt |
+| `ARGUS_RESTART_COOLDOWN_SECONDS` | `3600` | Cooldown after restart loop detection |
+| `ARGUS_DISK_CLEAN_MAX_AGE_DAYS` | `7` | Cleanup age threshold |
+| `TELEGRAM_BOT_TOKEN` | unset | Telegram API token |
+| `TELEGRAM_CHAT_ID` | unset | Telegram chat target |
 
-- Sends `argus.daily_summary` to Relay when available
-- Falls back to `state/relay-summary-fallback.jsonl` when Relay is unavailable
-- Optionally falls back to direct Telegram if bot credentials are configured
-- Includes `ARGUS_DASHBOARD_URL` link in summary payload when set
+See `argus.env.example` for the full list.
+
+---
+
+## Dependencies
+
+**Required:** `bash`, `claude` CLI, `jq`, `curl`, `timeout`
+
+**Optional:** `relay`, `br`, `systemctl`, `tmux`
+
+**Go runtime:** Go 1.22+ (stdlib only, no third-party modules)
+
+---
 
 ## For Agents
 
 This repo includes `AGENTS.md` with operational instructions.
 
-```bash
-git clone https://github.com/Perttulands/argus.git
-cd argus
-cp argus.env.example argus.env  # add your API keys
-chmod +x install.sh && ./install.sh
-sudo systemctl enable --now argus
-```
+---
 
-Dependencies: `curl`, `jq`, `bc`, systemd. That's it.
+## Part of Polis
 
-## Dependencies
+Argus is the infrastructure watchdog in a larger ecosystem of tools that work together.
 
-Requires: `claude` CLI -- Argus sends collected metrics to Claude Haiku for decision-making.
-Optional: `relay` -- publishes structured problem events to other agents.
+| Tool | What it does | Repo |
+|------|-------------|------|
+| **Ergon** | Work orchestration | [ergon-work-orchestration](https://github.com/Perttulands/ergon-work-orchestration) |
+| **Hermes** | Message relay between agents | [hermes-relay](https://github.com/Perttulands/hermes-relay) |
+| **Cerberus** | Access gate | [cerberus-gate](https://github.com/Perttulands/cerberus-gate) |
+| **Chiron** | Agent training framework | [chiron-trainer](https://github.com/Perttulands/chiron-trainer) |
+| **Learning Loop** | Feedback and learning pipeline | [learning-loop](https://github.com/Perttulands/learning-loop) |
+| **Senate** | Governance and decisions | [senate](https://github.com/Perttulands/senate) |
+| **Beads** | Work tracking units | [beads-polis](https://github.com/Perttulands/beads-polis) |
+| **Truthsayer** | Code analysis and review | [truthsayer](https://github.com/Perttulands/truthsayer) |
+| **UBS** | Bug scanning | [ultimate_bug_scanner](https://github.com/Perttulands/ultimate_bug_scanner) |
+| **Oathkeeper** | Promise and contract enforcement | [horkos-oathkeeper](https://github.com/Perttulands/horkos-oathkeeper) |
+| **Argus** | Server watchdog (you are here) | [argus-watcher](https://github.com/Perttulands/argus-watcher) |
+| **Utils** | Shared utilities | [polis-utils](https://github.com/Perttulands/polis-utils) |
+
+---
 
 ## Part of the Agora
 
 Argus was forged in **[Athena's Agora](https://github.com/Perttulands/athena-workspace)** — an autonomous coding system where AI agents build software and a hound with one red eye makes sure the server doesn't burn down while they do it.
 
-[Truthsayer](https://github.com/Perttulands/truthsayer) watches the code. [Oathkeeper](https://github.com/Perttulands/oathkeeper) watches the promises. [Relay](https://github.com/Perttulands/relay) carries the messages. Argus watches everything else. Between the four of them, the 3am page is someone else's problem.
+[Truthsayer](https://github.com/Perttulands/truthsayer) watches the code. [Oathkeeper](https://github.com/Perttulands/horkos-oathkeeper) watches the promises. [Relay](https://github.com/Perttulands/hermes-relay) carries the messages. Argus watches everything else. Between the four of them, the 3am page is someone else's problem.
 
 The [mythology](https://github.com/Perttulands/athena-workspace/blob/main/mythology.md) has the full story.
 

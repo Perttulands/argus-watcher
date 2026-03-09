@@ -240,6 +240,40 @@ close_service_bead() {
     fi
 }
 
+find_open_memory_bead() {
+    if ! command -v br >/dev/null 2>&1; then # REASON: bead operations must be no-ops when br is not installed.
+        return 1
+    fi
+
+    local search_json
+    search_json=$(cd "$ARGUS_BEADS_WORKDIR" && br search '' \
+        --label "type:memory" \
+        --label "status:active" \
+        --status open \
+        --json 2>/dev/null || echo "[]") # REASON: transient br failures should not break monitoring.
+    jq -r '.[0].id // empty' <<< "$search_json" 2>/dev/null || true
+}
+
+close_memory_bead() {
+    if ! command -v br >/dev/null 2>&1; then # REASON: bead operations must be no-ops when br is not installed.
+        return 0
+    fi
+
+    local bead_id
+    bead_id=$(find_open_memory_bead || true) # REASON: lookup failures should not block recovery path.
+    if [[ -n "$bead_id" ]]; then
+        if ! (
+            cd "$ARGUS_BEADS_WORKDIR" &&
+                br close "$bead_id" \
+                    --reason "Memory usage recovered" \
+                    >/dev/null 2>&1 # REASON: close output/failures are non-fatal and should not block watchdog flow.
+        ); then
+            : # REASON: close failures should not break monitoring.
+        fi
+        echo "$bead_id"
+    fi
+}
+
 find_open_bead_for_problem_key() {
     local problem_key="${1:-}"
     [[ -n "$problem_key" ]] || return 1
@@ -278,6 +312,16 @@ create_bead() {
         fi
     fi
 
+    # For memory beads, use label-based dedup (description includes live stats that change every cycle)
+    if [[ "$problem_type" == "memory" ]]; then
+        local existing_memory_id
+        existing_memory_id=$(find_open_memory_bead || true) # REASON: lookup failures should fall back to attempting creation.
+        if [[ -n "$existing_memory_id" ]]; then
+            echo "$existing_memory_id"
+            return 0
+        fi
+    fi
+
     local existing_id
     existing_id=$(find_open_bead_for_problem_key "$problem_key" || true) # REASON: lookup failures should fall back to attempting creation.
     if [[ -n "$existing_id" ]]; then
@@ -303,10 +347,12 @@ Problem key: ${problem_key}
 EOF
 )
 
-    # Build labels: always include 'argus'; add service-specific labels for service beads
+    # Build labels: always include 'argus'; add type-specific labels for dedup
     local labels="argus"
     if [[ -n "$service_name" ]]; then
         labels="argus,service:${service_name},status:fail"
+    elif [[ "$problem_type" == "memory" ]]; then
+        labels="argus,type:memory,status:active"
     fi
 
     bead_id=$(cd "$ARGUS_BEADS_WORKDIR" && br create "$title" \
