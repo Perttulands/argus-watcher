@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Tests for service-down bead dedup, auto-resolve, and boot grace.
+# Tests for service alert relay behavior, legacy bead cleanup on recovery, and boot grace.
 # Mirrors the test harness pattern from actions_bead_creation_test.sh.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -92,15 +92,17 @@ pass() {
     echo "  PASS: $1"
 }
 
-# ── Test 1: DEDUP — second failure for same service reuses existing bead ──
+# ── Test 1: Failures relay without creating beads ──
 
-echo "=== Test 1: Service bead dedup ==="
+echo "=== Test 1: Service failures do not create beads ==="
 
-# First failure — no existing bead, should create
+# First failure — no existing bead, should relay but not create
 execute_action '{"type":"restart_service","target":"openclaw-gateway","reason":"service down"}' || true # REASON: test intentionally continues after simulated failure.
 create_count=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
-assert_eq "$create_count" "1" "first failure creates one bead"
-pass "first failure creates bead"
+assert_eq "$create_count" "0" "first failure should not create a bead"
+last_bead_id=$(tail -n1 "$ARGUS_PROBLEMS_FILE" | jq -r '.bead_id')
+assert_eq "$last_bead_id" "null" "failed service action should not record a bead id"
+pass "first failure relays without bead creation"
 
 # Reset backoff state so second attempt is allowed
 echo '{"services":{}}' > "$ARGUS_RESTART_BACKOFF_FILE"
@@ -110,14 +112,13 @@ cat > "$FAKE_BR_SEARCH_JSON" <<'EOF'
 [{"id":"existing-svc-bead","title":"[argus] service: openclaw-gateway"}]
 EOF
 
-# Second failure — should find existing bead via label search, skip create
+# Second failure — should still avoid creating or attaching beads
 execute_action '{"type":"restart_service","target":"openclaw-gateway","reason":"service still down"}' || true # REASON: test intentionally continues after simulated failure.
 create_count_after=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
-assert_eq "$create_count_after" "1" "second failure reuses existing bead (no extra create)"
-
+assert_eq "$create_count_after" "0" "second failure should not create a bead either"
 last_bead_id=$(tail -n1 "$ARGUS_PROBLEMS_FILE" | jq -r '.bead_id')
-assert_eq "$last_bead_id" "existing-svc-bead" "reused bead id matches search result"
-pass "second failure reuses existing bead"
+assert_eq "$last_bead_id" "null" "second failed service action should not record a bead id"
+pass "second failure still avoids bead creation"
 
 # ── Test 2: AUTO-RESOLVE — successful restart closes open fail bead ──
 
@@ -142,7 +143,7 @@ cat > "$FAKE_BR_SEARCH_JSON" <<'EOF'
 [{"id":"bead-to-close","title":"[argus] service: openclaw-gateway"}]
 EOF
 
-> "$FAKE_BR_CLOSE_LOG"
+: > "$FAKE_BR_CLOSE_LOG"
 execute_action '{"type":"restart_service","target":"openclaw-gateway","reason":"service recovered check"}'
 
 close_called=$(grep -c "bead-to-close" "$FAKE_BR_CLOSE_LOG" 2>/dev/null || echo 0) # REASON: missing close log should count as zero for assertions.
@@ -172,7 +173,7 @@ echo "[]" > "$FAKE_BR_SEARCH_JSON"
 system_uptime_seconds() { echo 30; }
 
 # Reset create count
-> "$FAKE_BR_LOG"
+: > "$FAKE_BR_LOG"
 
 execute_action '{"type":"restart_service","target":"test-svc","reason":"boot startup failure"}' || true # REASON: test intentionally continues after simulated failure.
 
@@ -183,37 +184,22 @@ boot_result=$(tail -n1 "$ARGUS_PROBLEMS_FILE" | jq -r '.action_result')
 assert_eq "$boot_result" "boot-grace" "action_result is boot-grace"
 pass "boot grace skips bead creation"
 
-# ── Test 4: After boot grace expires, beads are created normally ──
+# ── Test 4: After boot grace expires, actions still avoid bead creation ──
 
-echo "=== Test 4: Post-boot creates beads normally ==="
+echo "=== Test 4: Post-boot still avoids bead creation ==="
 
 # Override uptime to be past grace period
 system_uptime_seconds() { echo 999; }
 
 # Reset backoff
 echo '{"services":{}}' > "$ARGUS_RESTART_BACKOFF_FILE"
-> "$FAKE_BR_LOG"
+: > "$FAKE_BR_LOG"
 
 execute_action '{"type":"restart_service","target":"test-svc","reason":"real failure"}' || true # REASON: test intentionally continues after simulated failure.
 
 post_boot_create_count=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
-assert_eq "$post_boot_create_count" "1" "bead created after boot grace expires"
-pass "post-boot bead creation works"
-
-# ── Test 5: Service labels passed to br create ──
-
-echo "=== Test 5: Service labels in br create ==="
-
-# Check that the create call includes service-specific labels
-# The br fake logs all args as a single line; --labels value appears after -d body
-if grep -q "service:test-svc" "$FAKE_BR_LOG" && grep -q "status:fail" "$FAKE_BR_LOG"; then
-    pass "create includes service:name and status:fail labels"
-else
-    echo "ASSERTION FAILED: expected service labels in br log" >&2
-    echo "Full br log:" >&2
-    cat "$FAKE_BR_LOG" >&2
-    exit 1
-fi
+assert_eq "$post_boot_create_count" "0" "post-boot failures should still avoid bead creation"
+pass "post-boot failures still avoid bead creation"
 
 echo ""
 echo "actions_service_bead_test: PASS"

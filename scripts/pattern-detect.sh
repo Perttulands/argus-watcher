@@ -9,7 +9,7 @@ ANALYSIS_SCRIPT="${ARGUS_PATTERN_ANALYSIS_SCRIPT:-$SCRIPT_DIR/pattern-analysis.s
 ANALYSIS_FILE="${ARGUS_PATTERN_OUTPUT_FILE:-$ROOT_DIR/state/pattern-analysis.json}"
 STATE_FILE="${ARGUS_PATTERN_DETECT_STATE_FILE:-$ROOT_DIR/state/pattern-detect-state.json}"
 PATTERN_LOG_FILE="${ARGUS_PATTERN_LOG_FILE:-$ROOT_DIR/state/patterns.jsonl}"
-BEADS_WORKDIR="${ARGUS_BEADS_WORKDIR:-$HOME/athena/workspace}"
+BEADS_WORKDIR="${ARGUS_BEADS_WORKDIR:-}"
 
 mkdir -p "$(dirname "$STATE_FILE")"
 mkdir -p "$(dirname "$PATTERN_LOG_FILE")"
@@ -50,12 +50,14 @@ EOF
 )
 
 bead_id=""
-if command -v br >/dev/null 2>&1; then # REASON: bead integration is optional.
-    bead_id=$(cd "$BEADS_WORKDIR" && br create "$title" \
+if [[ -n "$BEADS_WORKDIR" ]] && command -v br >/dev/null 2>&1; then # REASON: bead integration is optional and requires an explicit beads workdir.
+    if bead_output=$(cd "$BEADS_WORKDIR" && br create "$title" \
         -d "$body" \
         --labels argus,pattern \
         --priority 2 \
-        --silent 2>/dev/null || true) # REASON: pattern reporting should continue even if bead creation fails.
+        --silent 2>/dev/null); then
+        bead_id="$bead_output"
+    fi
     bead_id=$(echo "$bead_id" | tr -d '[:space:]')
 fi
 
