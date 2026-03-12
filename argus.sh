@@ -7,6 +7,9 @@ trap 'echo "ERROR: argus.sh failed at line $LINENO" >&2' ERR
 # Claude Haiku to reason about system health and take corrective action.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+# shellcheck source=scripts/lib/state.sh
+source "${SCRIPT_DIR}/scripts/lib/state.sh"
 LOG_DIR="${SCRIPT_DIR}/logs"
 LOG_FILE="${LOG_DIR}/argus.log"
 PROMPT_FILE="${SCRIPT_DIR}/prompt.md"
@@ -175,7 +178,7 @@ record_cycle_state() {
         --arg detail "$detail" \
         --argjson failures "$consecutive_failures" \
         '{status: $status, timestamp: $timestamp, detail: $detail, consecutive_failures: $failures}' \
-        > "$CYCLE_STATE_FILE"
+        | state_atomic_write_from_stdin "$CYCLE_STATE_FILE"
 }
 
 # Check if previous cycle failed and include that in metrics

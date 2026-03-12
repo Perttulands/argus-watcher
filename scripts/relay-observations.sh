@@ -4,6 +4,7 @@ trap 'echo "ERROR: relay-observations failed at line $LINENO" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/state.sh"
 
 ARGUS_OBSERVATIONS_FILE="${ARGUS_OBSERVATIONS_FILE:-$ROOT_DIR/state/observations.md}"
 ARGUS_RELAY_BIN="${ARGUS_RELAY_BIN:-$HOME/go/bin/relay}"
@@ -94,8 +95,7 @@ if [[ -x "$ARGUS_RELAY_BIN" ]]; then
 fi
 
 if [[ "$relay_ok" != "true" ]]; then
-    mkdir -p "$(dirname "$ARGUS_RELAY_OBSERVATIONS_FALLBACK_FILE")"
-    printf '%s\n' "$payload" >> "$ARGUS_RELAY_OBSERVATIONS_FALLBACK_FILE"
+    state_atomic_append_line "$ARGUS_RELAY_OBSERVATIONS_FALLBACK_FILE" "$payload"
 fi
 
 delivery="relay"

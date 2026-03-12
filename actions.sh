@@ -34,9 +34,13 @@ ARGUS_RELAY_FROM="${ARGUS_RELAY_FROM:-argus}"
 ARGUS_RELAY_TIMEOUT="${ARGUS_RELAY_TIMEOUT:-5}"
 validate_int_env "ARGUS_RELAY_TIMEOUT" 1 300
 ACTIONS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+# shellcheck source=scripts/lib/state.sh
+source "$ACTIONS_DIR/scripts/lib/state.sh"
 ARGUS_STATE_DIR="${ARGUS_STATE_DIR:-${SCRIPT_DIR:-$ACTIONS_DIR}/state}"
 ARGUS_RELAY_FALLBACK_FILE="${ARGUS_RELAY_FALLBACK_FILE:-$ARGUS_STATE_DIR/relay-fallback.jsonl}"
 ARGUS_PROBLEMS_FILE="${ARGUS_PROBLEMS_FILE:-$ARGUS_STATE_DIR/problems.jsonl}"
+ARGUS_INCIDENTS_FILE="${ARGUS_INCIDENTS_FILE:-$ARGUS_STATE_DIR/incidents.jsonl}"
 ARGUS_OBSERVATIONS_FILE="${ARGUS_OBSERVATIONS_FILE:-$ARGUS_STATE_DIR/observations.md}"
 ARGUS_BEADS_WORKDIR="${ARGUS_BEADS_WORKDIR:-}"
 ARGUS_BEAD_PRIORITY="${ARGUS_BEAD_PRIORITY:-2}"
@@ -122,10 +126,8 @@ log_problem() {
     host=$(hostname -f 2>/dev/null || hostname) # REASON: FQDN may be unavailable; fallback to short hostname.
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    mkdir -p "$(dirname "$ARGUS_PROBLEMS_FILE")"
-    touch "$ARGUS_PROBLEMS_FILE"
-
-    jq -cn \
+    local record
+    record=$(jq -cn \
         --arg ts "$ts" \
         --arg severity "$severity" \
         --arg type "$problem_type" \
@@ -143,7 +145,29 @@ log_problem() {
             action_result: $action_result,
             bead_id: (if ($bead_id == "null" or $bead_id == "") then null else $bead_id end),
             host: $host
-        }' >> "$ARGUS_PROBLEMS_FILE"
+        }') || return 1
+
+    state_atomic_append_line "$ARGUS_PROBLEMS_FILE" "$record"
+
+    local incident
+    incident=$(jq -cn \
+        --arg event "argus.problem" \
+        --arg source "argus" \
+        --argjson problem "$record" \
+        '{
+            event: $event,
+            source: $source,
+            ts: $problem.ts,
+            severity: $problem.severity,
+            type: $problem.type,
+            description: $problem.description,
+            action_taken: $problem.action_taken,
+            action_result: $problem.action_result,
+            bead_id: $problem.bead_id,
+            host: $problem.host
+        }') || return 1
+
+    state_atomic_append_line "$ARGUS_INCIDENTS_FILE" "$incident"
 }
 
 generate_problem_key() {
@@ -407,23 +431,21 @@ send_relay_alert() {
 }
 
 ensure_dedup_file() {
-    mkdir -p "$(dirname "$ARGUS_DEDUP_FILE")"
     if [[ ! -f "$ARGUS_DEDUP_FILE" ]]; then
-        echo '{"keys":{}}' > "$ARGUS_DEDUP_FILE"
+        state_atomic_write_string "$ARGUS_DEDUP_FILE" '{"keys":{}}'
     fi
 }
 
 dedup_compact() {
     ensure_dedup_file
-    local now tmp_file
+    local now updated_json
     now=$(date -u +%s)
-    tmp_file="${ARGUS_DEDUP_FILE}.tmp"
 
-    jq --argjson now "$now" --argjson retention "$ARGUS_DEDUP_RETENTION_SECONDS" '
+    updated_json=$(jq --argjson now "$now" --argjson retention "$ARGUS_DEDUP_RETENTION_SECONDS" '
         .keys = ((.keys // {})
         | with_entries(select((.value.last_seen // 0) >= ($now - $retention))))
-    ' "$ARGUS_DEDUP_FILE" > "$tmp_file" 2>/dev/null || echo '{"keys":{}}' > "$tmp_file" # REASON: corrupted dedup state should self-heal to an empty map.
-    mv "$tmp_file" "$ARGUS_DEDUP_FILE"
+    ' "$ARGUS_DEDUP_FILE" 2>/dev/null || printf '%s' '{"keys":{}}') # REASON: corrupted dedup state should self-heal to an empty map.
+    state_atomic_write_string "$ARGUS_DEDUP_FILE" "$updated_json"
 }
 
 dedup_should_suppress() {
@@ -440,16 +462,15 @@ dedup_should_suppress() {
         return 0
     fi
 
-    local tmp_file
-    tmp_file="${ARGUS_DEDUP_FILE}.tmp"
-    jq --arg key "$problem_key" --argjson now "$now" '
+    local updated_json
+    updated_json=$(jq --arg key "$problem_key" --argjson now "$now" '
         .keys = (.keys // {})
         | .keys[$key] = {
             last_seen: $now,
             count: ((.keys[$key].count // 0) + 1)
         }
-    ' "$ARGUS_DEDUP_FILE" > "$tmp_file" 2>/dev/null || echo '{"keys":{}}' > "$tmp_file" # REASON: dedup write failures should not block action execution.
-    mv "$tmp_file" "$ARGUS_DEDUP_FILE"
+    ' "$ARGUS_DEDUP_FILE" 2>/dev/null || printf '%s' '{"keys":{}}') # REASON: dedup write failures should not block action execution.
+    state_atomic_write_string "$ARGUS_DEDUP_FILE" "$updated_json"
     return 1
 }
 
@@ -462,8 +483,7 @@ relay_enabled_argus() {
 
 relay_queue_fallback() {
     local payload="$1"
-    mkdir -p "$(dirname "$ARGUS_RELAY_FALLBACK_FILE")"
-    printf '%s\n' "$payload" >> "$ARGUS_RELAY_FALLBACK_FILE"
+    state_atomic_append_line "$ARGUS_RELAY_FALLBACK_FILE" "$payload"
 }
 
 relay_publish_problem() {
@@ -714,12 +734,11 @@ action_log() {
         obs_size=$(stat -c%s "$log_file" 2>/dev/null || echo 0) # REASON: unreadable files should not stop observation logging.
         if (( obs_size > 512000 )); then
             mv "$log_file" "${log_file}.old"
-            echo "# Argus Observations (rotated at $timestamp)" > "$log_file"
-            echo "" >> "$log_file"
+            printf '# Argus Observations (rotated at %s)\n\n' "$timestamp" | state_atomic_write_from_stdin "$log_file"
         fi
     fi
 
-    echo "- **[$timestamp]** $observation" >> "$log_file"
+    state_atomic_append_line "$log_file" "- **[$timestamp]** $observation"
     echo "Observation logged: $observation"
 
     local severity
@@ -765,9 +784,8 @@ now_epoch() {
 }
 
 ensure_restart_backoff_file() {
-    mkdir -p "$(dirname "$ARGUS_RESTART_BACKOFF_FILE")"
     if [[ ! -f "$ARGUS_RESTART_BACKOFF_FILE" ]]; then
-        echo '{"services":{}}' > "$ARGUS_RESTART_BACKOFF_FILE"
+        state_atomic_write_string "$ARGUS_RESTART_BACKOFF_FILE" '{"services":{}}'
     fi
 }
 
@@ -788,9 +806,8 @@ restart_backoff_set() {
     local cooldown_until="$5"
     ensure_restart_backoff_file
 
-    local tmp_file
-    tmp_file="${ARGUS_RESTART_BACKOFF_FILE}.tmp"
-    jq --arg service "$service_name" \
+    local updated_json
+    updated_json=$(jq --arg service "$service_name" \
         --argjson attempts "$attempts" \
         --argjson last_attempt "$last_attempt" \
         --argjson last_success "$last_success" \
@@ -802,8 +819,8 @@ restart_backoff_set() {
             last_attempt: $last_attempt,
             last_success: $last_success,
             cooldown_until: $cooldown_until
-        }' "$ARGUS_RESTART_BACKOFF_FILE" > "$tmp_file" 2>/dev/null || echo '{"services":{}}' > "$tmp_file" # REASON: failed state writes should not break action execution.
-    mv "$tmp_file" "$ARGUS_RESTART_BACKOFF_FILE"
+        }' "$ARGUS_RESTART_BACKOFF_FILE" 2>/dev/null || printf '%s' '{"services":{}}') # REASON: failed state writes should not break action execution.
+    state_atomic_write_string "$ARGUS_RESTART_BACKOFF_FILE" "$updated_json"
 }
 
 disk_root_pct() {
