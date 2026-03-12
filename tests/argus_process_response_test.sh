@@ -15,8 +15,6 @@ LOG_DIR="$TEST_ROOT/logs"
 LOG_FILE="$LOG_DIR/argus.log"
 mkdir -p "$LOG_DIR"
 
-HOSTNAME_CACHED="test-host"
-
 # Set up action dependencies
 FAKE_BIN="$TEST_ROOT/bin"
 mkdir -p "$FAKE_BIN"

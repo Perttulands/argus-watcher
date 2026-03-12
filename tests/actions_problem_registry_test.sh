@@ -14,6 +14,35 @@ export ARGUS_RELAY_FALLBACK_FILE="$TEST_ROOT/relay-fallback.jsonl"
 export ARGUS_BEADS_WORKDIR="$TEST_ROOT/workspace"
 mkdir -p "$ARGUS_BEADS_WORKDIR"
 
+FAKE_BIN="$TEST_ROOT/bin"
+mkdir -p "$FAKE_BIN"
+export PATH="$FAKE_BIN:$PATH"
+export FAKE_BR_OPEN_JSON="$TEST_ROOT/open.json"
+export FAKE_BR_CREATE_ID="registry-bead"
+echo "[]" > "$FAKE_BR_OPEN_JSON"
+
+cat > "$FAKE_BIN/br" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cmd="${1:-}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+case "$cmd" in
+  list|search)
+    cat "$FAKE_BR_OPEN_JSON"
+    ;;
+  create)
+    echo "${FAKE_BR_CREATE_ID}"
+    ;;
+  *)
+    echo "unsupported command: $cmd" >&2
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/br"
+
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/actions.sh"
 

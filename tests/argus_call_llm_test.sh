@@ -16,7 +16,6 @@ LOG_FILE="$LOG_DIR/argus.log"
 mkdir -p "$LOG_DIR"
 
 LLM_TIMEOUT=5
-HOSTNAME_CACHED="test-host"
 
 FAKE_BIN="$TEST_ROOT/bin"
 mkdir -p "$FAKE_BIN"
