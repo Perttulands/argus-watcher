@@ -17,6 +17,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - README: further mythology-forward rewrite — spicy, standalone voice (f042a84, e5f62eb)
 - Improved `claude -p` failure diagnostics in `argus.sh` by capturing and logging stderr output on non-zero exits.
 - Wrapped watchdog breadcrumb load errors with context (`load breadcrumb: ...`) in `internal/watchdog/watchdog.go`.
+- 2026-03-09: Switched operational escalation in `actions.sh` from `create_bead` task creation to `relay send athena "ARGUS ALERT: [...]"` messaging so repeated/failing alerts reach Athena's inbox without creating beads noise; also removed the hardcoded `ARGUS_BEADS_WORKDIR` fallback path.
 
 ### Fixed
 - 2026-02-20: Extended `actions.sh` integer env validation to additional runtime controls (`ARGUS_RELAY_TIMEOUT`, `ARGUS_BEAD_PRIORITY`, `ARGUS_DEDUP_RETENTION_SECONDS`, `ARGUS_RESTART_BACKOFF_THIRD_DELAY`, `ARGUS_RESTART_COOLDOWN_SECONDS`) so invalid values fail fast before action execution.

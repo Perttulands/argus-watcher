@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Tests for memory alert bead dedup via label search.
+# Tests for memory alert relay behavior and legacy bead cleanup helpers.
 # Mirrors the test harness pattern from actions_service_bead_test.sh.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -78,52 +78,40 @@ pass() {
     echo "  PASS: $1"
 }
 
-# ── Test 1: DEDUP — second memory alert reuses existing bead ──
+# ── Test 1: Alerts do not create beads ──
 
-echo "=== Test 1: Memory bead dedup ==="
+echo "=== Test 1: Memory alerts do not create beads ==="
 
-# First alert — no existing bead, should create
+# First alert — no existing bead, should relay but not create
 execute_action '{"type":"alert","message":"Memory usage critical at 92% (14800MB/16000MB) — top process: node (PID 1234, running 2h)"}' || true # REASON: test intentionally continues after alert path.
 create_count=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
-assert_eq "$create_count" "1" "first memory alert creates one bead"
-pass "first memory alert creates bead"
+assert_eq "$create_count" "0" "first memory alert should not create a bead"
+first_bead_id=$(tail -n1 "$ARGUS_PROBLEMS_FILE" | jq -r '.bead_id')
+assert_eq "$first_bead_id" "null" "first memory alert should not record a bead id"
+pass "first memory alert avoids bead creation"
 
 # Now simulate an existing open memory bead in search results
 cat > "$FAKE_BR_SEARCH_JSON" <<'EOF'
 [{"id":"existing-mem-bead","title":"[argus] memory: Memory usage critical"}]
 EOF
 
-# Second alert with different stats — should find existing bead via label search, skip create
+# Second alert with different stats — should still avoid creating or attaching beads
 execute_action '{"type":"alert","message":"Memory usage critical at 93% (14900MB/16000MB) — top process: node (PID 1234, running 2h5m)"}' || true # REASON: test intentionally continues after alert path.
 create_count_after=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
-assert_eq "$create_count_after" "1" "second memory alert reuses existing bead (no extra create)"
+assert_eq "$create_count_after" "0" "second memory alert should not create beads either"
 
 last_bead_id=$(tail -n1 "$ARGUS_PROBLEMS_FILE" | jq -r '.bead_id')
-assert_eq "$last_bead_id" "existing-mem-bead" "reused bead id matches search result"
-pass "second memory alert reuses existing bead"
+assert_eq "$last_bead_id" "null" "second memory alert should not record a bead id"
+pass "second memory alert still avoids bead creation"
 
-# ── Test 2: Memory labels set correctly on creation ──
+# ── Test 2: close_memory_bead closes open memory bead ──
 
-echo "=== Test 2: Memory labels in br create ==="
-
-# Check that the first create call includes memory-specific labels
-if grep -q "type:memory" "$FAKE_BR_LOG" && grep -q "status:active" "$FAKE_BR_LOG"; then
-    pass "create includes type:memory and status:active labels"
-else
-    echo "ASSERTION FAILED: expected memory labels in br log" >&2
-    echo "Full br log:" >&2
-    cat "$FAKE_BR_LOG" >&2
-    exit 1
-fi
-
-# ── Test 3: close_memory_bead closes open memory bead ──
-
-echo "=== Test 3: close_memory_bead ==="
+echo "=== Test 2: close_memory_bead ==="
 
 cat > "$FAKE_BR_SEARCH_JSON" <<'EOF'
 [{"id":"mem-bead-to-close","title":"[argus] memory: Memory usage critical"}]
 EOF
-> "$FAKE_BR_CLOSE_LOG"
+: > "$FAKE_BR_CLOSE_LOG"
 
 closed_id=$(close_memory_bead)
 assert_eq "$closed_id" "mem-bead-to-close" "close_memory_bead returns closed bead id"
@@ -132,12 +120,12 @@ close_called=$(grep -c "mem-bead-to-close" "$FAKE_BR_CLOSE_LOG" 2>/dev/null || e
 assert_eq "$close_called" "1" "br close called for memory bead"
 pass "close_memory_bead closes open bead"
 
-# ── Test 4: close_memory_bead is no-op when no open bead ──
+# ── Test 3: close_memory_bead is no-op when no open bead ──
 
-echo "=== Test 4: close_memory_bead no-op ==="
+echo "=== Test 3: close_memory_bead no-op ==="
 
 echo "[]" > "$FAKE_BR_SEARCH_JSON"
-> "$FAKE_BR_CLOSE_LOG"
+: > "$FAKE_BR_CLOSE_LOG"
 
 closed_id=$(close_memory_bead)
 assert_eq "$closed_id" "" "close_memory_bead returns empty when no open bead"

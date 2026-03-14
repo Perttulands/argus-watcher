@@ -9,7 +9,7 @@ mkdir -p "$HOME"
 export ARGUS_STATE_DIR="$TEST_ROOT/state"
 export ARGUS_PROBLEMS_FILE="$ARGUS_STATE_DIR/problems.jsonl"
 export ARGUS_OBSERVATIONS_FILE="$TEST_ROOT/observations.md"
-export ARGUS_RELAY_ENABLED=false
+export ARGUS_RELAY_ENABLED=true
 export ARGUS_RELAY_FALLBACK_FILE="$TEST_ROOT/relay-fallback.jsonl"
 export ARGUS_BEADS_WORKDIR="$TEST_ROOT/workspace"
 export ARGUS_BEAD_REPEAT_THRESHOLD=3
@@ -21,7 +21,9 @@ export PATH="$FAKE_BIN:$PATH"
 export FAKE_BR_LOG="$TEST_ROOT/br.log"
 export FAKE_BR_OPEN_JSON="$TEST_ROOT/open.json"
 export FAKE_BR_CREATE_ID="athena-fake"
-touch "$FAKE_BR_LOG"
+export FAKE_RELAY_LOG="$TEST_ROOT/relay.log"
+touch "$FAKE_BR_LOG" "$FAKE_RELAY_LOG"
+echo "[]" > "$FAKE_BR_OPEN_JSON"
 
 cat > "$FAKE_BIN/br" <<'EOF'
 #!/usr/bin/env bash
@@ -32,12 +34,8 @@ if [[ $# -gt 0 ]]; then
   shift
 fi
 case "$cmd" in
-  list)
-    if [[ -f "$FAKE_BR_OPEN_JSON" ]]; then
-      cat "$FAKE_BR_OPEN_JSON"
-    else
-      echo "[]"
-    fi
+  list|search)
+    cat "$FAKE_BR_OPEN_JSON"
     ;;
   create)
     echo "${FAKE_BR_CREATE_ID}"
@@ -49,6 +47,13 @@ case "$cmd" in
 esac
 EOF
 chmod +x "$FAKE_BIN/br"
+
+cat > "$FAKE_BIN/relay" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "$*" >> "$FAKE_RELAY_LOG"
+EOF
+chmod +x "$FAKE_BIN/relay"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/actions.sh"
@@ -63,7 +68,7 @@ assert_eq() {
     fi
 }
 
-# 1) Failed action should create a bead and store bead_id in registry
+# 1) Failed action should relay and store null bead_id in registry
 if execute_action '{"type":"restart_service","target":"gateway","reason":"service down"}'; then
     echo "expected restart_service to fail because service is not allowlisted" >&2
     exit 1
@@ -72,12 +77,18 @@ fi
 first_bead_id=$(tail -n1 "$ARGUS_PROBLEMS_FILE" | jq -r '.bead_id')
 first_result=$(tail -n1 "$ARGUS_PROBLEMS_FILE" | jq -r '.action_result')
 assert_eq "$first_result" "failure" "failed action result"
-assert_eq "$first_bead_id" "athena-fake" "bead id persisted for failed action"
+assert_eq "$first_bead_id" "null" "bead id should stay null for failed action"
 
 create_count=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
-assert_eq "$create_count" "1" "first creation call count"
+assert_eq "$create_count" "0" "failed action should not create beads"
+relay_count=$(wc -l < "$FAKE_RELAY_LOG")
+assert_eq "$relay_count" "1" "failed action should send one relay alert"
+grep -q 'send athena ARGUS ALERT: \[service\]' "$FAKE_RELAY_LOG" || {
+    echo "ASSERTION FAILED: expected service relay alert entry" >&2
+    exit 1
+}
 
-# 2) Existing open bead should be reused (dedup) instead of creating a new one
+# 2) Repeated observations should still relay without creating or reusing beads
 dedup_message="Disk pressure high 95%"
 problem_key=$(generate_problem_key "disk" "$dedup_message")
 cat > "$FAKE_BR_OPEN_JSON" <<EOF
@@ -88,9 +99,15 @@ EOF
 
 execute_action "{\"type\":\"log\",\"observation\":\"${dedup_message}\"}"
 second_bead_id=$(tail -n1 "$ARGUS_PROBLEMS_FILE" | jq -r '.bead_id')
-assert_eq "$second_bead_id" "athena-open" "existing open bead id should be reused"
+assert_eq "$second_bead_id" "null" "log action should not attach a bead id"
 
 create_count_after=$(awk '/^create /{count++} END{print count+0}' "$FAKE_BR_LOG")
-assert_eq "$create_count_after" "1" "no extra create call when open bead exists"
+assert_eq "$create_count_after" "0" "log action should not create beads"
+relay_count_after=$(wc -l < "$FAKE_RELAY_LOG")
+assert_eq "$relay_count_after" "2" "log action should send a second relay alert"
+grep -q 'action=log:observation; result=success' "$FAKE_RELAY_LOG" || {
+    echo "ASSERTION FAILED: expected log relay alert entry" >&2
+    exit 1
+}
 
 echo "actions_bead_creation_test: PASS"

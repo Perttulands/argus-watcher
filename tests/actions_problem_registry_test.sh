@@ -8,11 +8,41 @@ mkdir -p "$HOME"
 
 export ARGUS_STATE_DIR="$TEST_ROOT/state"
 export ARGUS_PROBLEMS_FILE="$ARGUS_STATE_DIR/problems.jsonl"
+export ARGUS_INCIDENTS_FILE="$ARGUS_STATE_DIR/incidents.jsonl"
 export ARGUS_OBSERVATIONS_FILE="$TEST_ROOT/observations.md"
 export ARGUS_RELAY_ENABLED=false
 export ARGUS_RELAY_FALLBACK_FILE="$TEST_ROOT/relay-fallback.jsonl"
 export ARGUS_BEADS_WORKDIR="$TEST_ROOT/workspace"
 mkdir -p "$ARGUS_BEADS_WORKDIR"
+
+FAKE_BIN="$TEST_ROOT/bin"
+mkdir -p "$FAKE_BIN"
+export PATH="$FAKE_BIN:$PATH"
+export FAKE_BR_OPEN_JSON="$TEST_ROOT/open.json"
+export FAKE_BR_CREATE_ID="registry-bead"
+echo "[]" > "$FAKE_BR_OPEN_JSON"
+
+cat > "$FAKE_BIN/br" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cmd="${1:-}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+case "$cmd" in
+  list|search)
+    cat "$FAKE_BR_OPEN_JSON"
+    ;;
+  create)
+    echo "${FAKE_BR_CREATE_ID}"
+    ;;
+  *)
+    echo "unsupported command: $cmd" >&2
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/br"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/actions.sh"
@@ -31,11 +61,18 @@ log_problem "warning" "disk" "Disk usage above threshold" "alert:telegram" "succ
 
 [[ -f "$ARGUS_PROBLEMS_FILE" ]] || { echo "problems file was not created" >&2; exit 1; }
 jq -c . "$ARGUS_PROBLEMS_FILE" >/dev/null
+[[ -f "$ARGUS_INCIDENTS_FILE" ]] || { echo "incidents file was not created" >&2; exit 1; }
+jq -c . "$ARGUS_INCIDENTS_FILE" >/dev/null
 
 first_type=$(jq -r '.type' "$ARGUS_PROBLEMS_FILE")
 first_result=$(jq -r '.action_result' "$ARGUS_PROBLEMS_FILE")
 assert_eq "$first_type" "disk" "first record type"
 assert_eq "$first_result" "success" "first record result"
+
+incident_event=$(jq -r '.event' "$ARGUS_INCIDENTS_FILE")
+incident_type=$(jq -r '.type' "$ARGUS_INCIDENTS_FILE")
+assert_eq "$incident_event" "argus.problem" "incident event name"
+assert_eq "$incident_type" "disk" "incident mirrors problem type"
 
 line_count_before=$(wc -l < "$ARGUS_PROBLEMS_FILE")
 if execute_action '{"type":"restart_service","target":"fake-service","reason":"service down"}'; then
@@ -60,5 +97,7 @@ assert_eq "$final_result" "success" "log action result"
 
 jq -s 'map(has("ts") and has("severity") and has("type") and has("description") and has("action_taken") and has("action_result") and has("bead_id") and has("host")) | all' \
     "$ARGUS_PROBLEMS_FILE" | grep -qx true
+jq -s 'map(has("event") and has("source") and has("ts") and has("severity") and has("type") and has("description") and has("action_taken") and has("action_result") and has("bead_id") and has("host")) | all' \
+    "$ARGUS_INCIDENTS_FILE" | grep -qx true
 
 echo "actions_problem_registry_test: PASS"

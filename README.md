@@ -99,6 +99,7 @@ Status is `degraded` when `PreviousCycleInterrupted=true` or `ConsecutiveFailure
 | `scripts/pattern-detect.sh` | Create one daily pattern bead per new signature |
 | `scripts/relay-observations.sh` | Send recent observation snapshot to Relay (fallback to JSONL) |
 | `scripts/relay-summary.sh` | Send daily summary to Relay (fallback to Telegram or JSONL) |
+| `scripts/relay-drain.sh` | Replay fallback JSONL queues to Relay and retain only failed payloads |
 
 ---
 
@@ -177,6 +178,7 @@ No arbitrary command execution. Every input is validated like it's trying to esc
 - Disk space guard — skips LLM call if root filesystem `< 100MB` free; sends emergency alert
 - Self-monitoring — escalates after 3 consecutive cycle failures
 - Boot grace period — suppresses service restart failure beads during `ARGUS_BOOT_GRACE_SECONDS` (default 120s)
+- Atomic writes for state files and fallback queues
 - Clean shutdown on `SIGTERM`/`SIGINT`
 - JSON state via `jq` (no injection from error messages)
 
@@ -206,6 +208,8 @@ Quick validation:
 ```bash
 jq -c . state/problems.jsonl >/dev/null
 ```
+
+Argus also mirrors the same problem records into `state/incidents.jsonl` (override with `ARGUS_INCIDENTS_FILE`) for downstream UI consumers. Until Phase 4 unifies incident visibility, Argus owns this file and consumers such as Orbit must treat it as read-only.
 
 ---
 
@@ -292,9 +296,10 @@ Observations logged via the `log` action are written to `ARGUS_OBSERVATIONS_FILE
 ```bash
 scripts/relay-observations.sh    # send observation snapshot to Relay
 scripts/relay-summary.sh         # send daily summary to Relay
+scripts/relay-drain.sh           # replay queued fallback payloads to Relay
 ```
 
-Both scripts fall back to JSONL queues when Relay is unavailable. `relay-summary.sh` optionally falls back to direct Telegram if bot credentials are configured.
+All three scripts use atomic queue updates. `relay-summary.sh` optionally falls back to direct Telegram if bot credentials are configured. `relay-drain.sh` only removes entries that Relay accepted; failed payloads stay queued for a later retry.
 
 ---
 
@@ -308,6 +313,8 @@ Copy `argus.env.example` to `argus.env` and edit. Key variables:
 | `ARGUS_GATEWAY_PORT` | `18505` | Gateway liveness probe port |
 | `ARGUS_RELAY_ENABLED` | `true` | Enable Relay publishing |
 | `ARGUS_RELAY_BIN` | `$HOME/go/bin/relay` | Relay CLI path |
+| `ARGUS_INCIDENTS_FILE` | `$ARGUS_STATE_DIR/incidents.jsonl` | Read-only incident/event stream for downstream consumers |
+| `ARGUS_RELAY_DRAIN_MAX_ITEMS` | `100` | Max queued payloads replayed per drain run |
 | `ARGUS_DEDUP_WINDOW` | `3600` | Alert suppression window (seconds) |
 | `ARGUS_BEAD_REPEAT_THRESHOLD` | `3` | Recurrence count for bead creation |
 | `ARGUS_RESTART_BACKOFF_SECOND_DELAY` | `60` | Delay before 2nd restart attempt |

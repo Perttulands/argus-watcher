@@ -4,6 +4,8 @@ trap 'echo "ERROR: relay-summary.sh failed at line $LINENO" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/lib/state.sh
+source "$ROOT_DIR/scripts/lib/state.sh"
 
 ARGUS_RELAY_SUMMARY_ENABLED="${ARGUS_RELAY_SUMMARY_ENABLED:-true}"
 ARGUS_RELAY_BIN="${ARGUS_RELAY_BIN:-$HOME/go/bin/relay}"
@@ -72,8 +74,7 @@ if [[ -x "$ARGUS_RELAY_BIN" ]]; then
 fi
 
 if [[ "$relay_ok" != "true" ]]; then
-    mkdir -p "$(dirname "$ARGUS_RELAY_SUMMARY_FALLBACK_FILE")"
-    printf '%s\n' "$payload" >> "$ARGUS_RELAY_SUMMARY_FALLBACK_FILE"
+    state_atomic_append_line "$ARGUS_RELAY_SUMMARY_FALLBACK_FILE" "$payload"
 
     if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]] && [[ -n "${TELEGRAM_CHAT_ID:-}" ]]; then
         tg_payload=$(jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$summary_text" '{chat_id:$chat_id,text:$text,disable_web_page_preview:true}')

@@ -14,12 +14,8 @@ mkdir -p "$HOME"
 # Override globals that argus.sh sets at source time
 LOG_DIR="$TEST_ROOT/logs"
 LOG_FILE="$LOG_DIR/argus.log"
-PROMPT_FILE="$TEST_ROOT/prompt.md"
-CYCLE_STATE_FILE="$LOG_DIR/cycle_state.json"
 MAX_LOG_SIZE=100  # 100 bytes for easy testing
 MAX_LOG_FILES=3
-HOSTNAME_CACHED="test-host"
-SLEEP_INTERVAL=1
 
 mkdir -p "$LOG_DIR"
 
