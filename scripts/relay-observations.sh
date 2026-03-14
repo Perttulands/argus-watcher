@@ -4,6 +4,7 @@ trap 'echo "ERROR: relay-observations failed at line $LINENO" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/lib/state.sh
 source "$ROOT_DIR/scripts/lib/state.sh"
 
 ARGUS_OBSERVATIONS_FILE="${ARGUS_OBSERVATIONS_FILE:-$ROOT_DIR/state/observations.md}"

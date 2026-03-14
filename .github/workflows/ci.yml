@@ -75,7 +75,7 @@ jobs:
 
       - name: Run shellcheck
         run: |
-          shellcheck \
+          shellcheck -x \
             actions.sh \
             argus.sh \
             collectors.sh \
