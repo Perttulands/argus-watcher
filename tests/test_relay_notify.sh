@@ -96,7 +96,7 @@ echo "=== Test 2: create_bead is not called in action dispatch ==="
 
 # Verify create_bead is not invoked anywhere in the action dispatch path
 # (it should only exist as a dead function definition, or not at all)
-if grep -q '^[^#]*create_bead ' "$ROOT/actions.sh" | grep -v '^create_bead()'; then
+if grep '^[^#]*create_bead ' "$ROOT/actions.sh" | grep -qv '^create_bead()'; then
     echo "FAIL: create_bead is still called (not just defined)" >&2
     exit 1
 fi
