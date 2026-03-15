@@ -271,7 +271,7 @@ run_monitoring_cycle() {
     fi
 
     # Save raw response for debugging
-    echo "$llm_response" > "${LOG_DIR}/last_response.json"
+    state_atomic_write_string "${LOG_DIR}/last_response.json" "$llm_response"
 
     # Process response and execute actions
     if ! process_llm_response "$llm_response"; then

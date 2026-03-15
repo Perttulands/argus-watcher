@@ -9,3 +9,6 @@ argus.env
 
 # Runtime logs
 logs/
+$ARGUS_STATE_DIR/
+$HOME/
+state/
