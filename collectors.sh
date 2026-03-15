@@ -209,6 +209,22 @@ collect_agents() {
         echo "  Names:"
         tmux list-sessions -F "    #{session_name} (#{session_windows} windows, created #{session_created_string})" 2>/dev/null || true # REASON: session enumeration may fail during tmux churn.
     fi
+
+    # Custom TMUX_TMPDIR sessions (claude-* agents use a non-default socket dir)
+    local custom_tmpdir="${ARGUS_TMUX_TMPDIR:-/home/polis/.tmux-socket}"
+    if [[ -d "$custom_tmpdir" ]]; then
+        local custom_socket="$custom_tmpdir/default"
+        echo "TMUX_TMPDIR sessions ($custom_tmpdir):"
+        local custom_count
+        custom_count=$(tmux -S "$custom_socket" list-sessions 2>/dev/null | wc -l) || custom_count=0 # REASON: missing socket should be treated as zero sessions.
+        custom_count=$(echo "$custom_count" | tr -d '[:space:]')
+        echo "  Count: $custom_count"
+        if (( custom_count > 0 )); then
+            echo "  Names:"
+            tmux -S "$custom_socket" list-sessions -F "    #{session_name} (#{session_windows} windows, created #{session_created_string})" 2>/dev/null || true # REASON: session enumeration may fail during tmux churn.
+        fi
+    fi
+
     echo "OpenClaw socket sessions:"
     local oc_sessions
     oc_sessions=$(tmux -S "${ARGUS_TMUX_SOCKET:-/tmp/openclaw-coding-agents.sock}" list-sessions -F "    #{session_name}" 2>/dev/null) || true # REASON: missing OpenClaw socket should not be treated as an error.
