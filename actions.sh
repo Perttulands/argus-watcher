@@ -38,9 +38,7 @@ ARGUS_STATE_DIR="${ARGUS_STATE_DIR:-${SCRIPT_DIR:-$ACTIONS_DIR}/state}"
 ARGUS_RELAY_FALLBACK_FILE="${ARGUS_RELAY_FALLBACK_FILE:-$ARGUS_STATE_DIR/relay-fallback.jsonl}"
 ARGUS_PROBLEMS_FILE="${ARGUS_PROBLEMS_FILE:-$ARGUS_STATE_DIR/problems.jsonl}"
 ARGUS_OBSERVATIONS_FILE="${ARGUS_OBSERVATIONS_FILE:-$ARGUS_STATE_DIR/observations.md}"
-ARGUS_BEADS_WORKDIR="${ARGUS_BEADS_WORKDIR:-$HOME/athena/workspace}"
-ARGUS_BEAD_PRIORITY="${ARGUS_BEAD_PRIORITY:-2}"
-validate_int_env "ARGUS_BEAD_PRIORITY" 0 4
+ARGUS_BEADS_WORKDIR="${ARGUS_BEADS_WORKDIR:-}"
 ARGUS_BEAD_REPEAT_THRESHOLD="${ARGUS_BEAD_REPEAT_THRESHOLD:-3}"
 validate_int_env "ARGUS_BEAD_REPEAT_THRESHOLD" 1 100
 ARGUS_BEAD_REPEAT_WINDOW_SECONDS="${ARGUS_BEAD_REPEAT_WINDOW_SECONDS:-86400}"
@@ -274,97 +272,35 @@ close_memory_bead() {
     fi
 }
 
-find_open_bead_for_problem_key() {
-    local problem_key="${1:-}"
-    [[ -n "$problem_key" ]] || return 1
-
-    if ! command -v br >/dev/null 2>&1; then # REASON: bead creation must be a no-op when br is not installed.
-        return 1
-    fi
-
-    local open_json
-    open_json=$(cd "$ARGUS_BEADS_WORKDIR" && br list --status open 2>/dev/null || echo "[]") # REASON: transient br failures should not break monitoring.
-    jq -r --arg marker "Problem key: ${problem_key}" \
-        '.[] | select((.description // "") | contains($marker)) | .id' <<< "$open_json" | head -n1
-}
-
-create_bead() {
+send_relay_alert() {
     local problem_type="${1:-process}"
-    local description="${2:-No description provided}"
-    local severity="${3:-info}"
+    local severity="${2:-info}"
+    local description="${3:-No description provided}"
     local action_taken="${4:-none}"
     local action_result="${5:-unknown}"
     local problem_key="${6:-}"
     local seen_count="${7:-1}"
-    local service_name="${8:-}"
 
-    if ! command -v br >/dev/null 2>&1; then # REASON: br integration is optional and should degrade gracefully.
-        return 0
-    fi
+    relay_enabled_argus || return 0
 
-    # For service beads, use label-based dedup (more reliable than description text matching)
-    if [[ -n "$service_name" ]]; then
-        local existing_service_id
-        existing_service_id=$(find_open_service_bead "$service_name" || true) # REASON: lookup failures should fall back to attempting creation.
-        if [[ -n "$existing_service_id" ]]; then
-            echo "$existing_service_id"
+    local relay_cmd="relay"
+    if ! command -v "$relay_cmd" >/dev/null 2>&1; then
+        if [[ -x "$ARGUS_RELAY_BIN" ]]; then
+            relay_cmd="$ARGUS_RELAY_BIN"
+        else
             return 0
         fi
     fi
 
-    # For memory beads, use label-based dedup (description includes live stats that change every cycle)
-    if [[ "$problem_type" == "memory" ]]; then
-        local existing_memory_id
-        existing_memory_id=$(find_open_memory_bead || true) # REASON: lookup failures should fall back to attempting creation.
-        if [[ -n "$existing_memory_id" ]]; then
-            echo "$existing_memory_id"
-            return 0
-        fi
-    fi
+    local description_inline summary message
+    description_inline=$(printf '%s' "$description" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+    summary="severity=${severity}; action=${action_taken}; result=${action_result}; seen=${seen_count}; key=${problem_key}; desc=${description_inline}"
+    message="ARGUS ALERT: [${problem_type}] ${summary}"
 
-    local existing_id
-    existing_id=$(find_open_bead_for_problem_key "$problem_key" || true) # REASON: lookup failures should fall back to attempting creation.
-    if [[ -n "$existing_id" ]]; then
-        echo "$existing_id"
-        return 0
-    fi
-
-    local host title body bead_id
-    host=$(hostname -f 2>/dev/null || hostname) # REASON: FQDN may be unavailable; fallback to short hostname.
-    title="[argus] ${problem_type}: ${description}"
-    body=$(cat <<EOF
-Argus detected an issue that needs human attention.
-
-Type: ${problem_type}
-Severity: ${severity}
-Description: ${description}
-Action taken: ${action_taken}
-Action result: ${action_result}
-Occurrences in window: ${seen_count}
-Host: ${host}
-
-Problem key: ${problem_key}
-EOF
-)
-
-    # Build labels: always include 'argus'; add type-specific labels for dedup
-    local labels="argus"
-    if [[ -n "$service_name" ]]; then
-        labels="argus,service:${service_name},status:fail"
-    elif [[ "$problem_type" == "memory" ]]; then
-        labels="argus,type:memory,status:active"
-    fi
-
-    bead_id=$(cd "$ARGUS_BEADS_WORKDIR" && br create "$title" \
-        -d "$body" \
-        --priority "$ARGUS_BEAD_PRIORITY" \
-        --labels "$labels" \
-        --silent 2>/dev/null) || true # REASON: creation failures should not fail Argus monitoring cycles.
-
-    bead_id=$(echo "$bead_id" | tr -d '[:space:]')
-    if [[ "$bead_id" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-        echo "$bead_id"
-    fi
+    timeout "$ARGUS_RELAY_TIMEOUT" "$relay_cmd" send athena "$message" \
+        --agent "$ARGUS_RELAY_FROM" \
+        --priority high \
+        --tag "argus,ops,alert" >/dev/null 2>&1 || true # REASON: relay alerts are best-effort and must not fail action execution.
 }
 
 ensure_dedup_file() {
@@ -925,14 +861,15 @@ action_check_and_kill_orphan_tests() {
 
     # Write state safely with jq
     mkdir -p "$(dirname "$ORPHAN_STATE_FILE")"
-    jq -n \
+    local _orphan_json
+    _orphan_json=$(jq -n \
         --arg pattern "node --test" \
         --argjson count "$new_count" \
         --argjson pids "$count" \
         --arg first_seen "$first_seen" \
         --arg last_seen "$now" \
-        '{pattern: $pattern, count: $count, pids: $pids, first_seen: $first_seen, last_seen: $last_seen}' \
-        > "$ORPHAN_STATE_FILE"
+        '{pattern: $pattern, count: $count, pids: $pids, first_seen: $first_seen, last_seen: $last_seen}')
+    state_atomic_write_string "$ORPHAN_STATE_FILE" "$_orphan_json"
 
     local argus_log="${LOG_DIR:-${SCRIPT_DIR:-$HOME/argus}/logs}/argus.log"
 
@@ -1000,7 +937,7 @@ execute_action() {
     local problem_key
     local recurrence_count=0
     local seen_count=1
-    local should_create_bead=false
+    local should_send_relay_alert=false
     local bead_id=""
     local service_name=""
 
@@ -1043,7 +980,7 @@ execute_action() {
             fi
             # BOOT GRACE: skip bead creation for transient startup failures
             if [[ "$action_failed" == "true" ]] && in_boot_grace_period; then
-                should_create_bead=false
+                should_send_relay_alert=false
                 action_result="boot-grace"
                 echo "Boot grace: skipping bead for ${target} (uptime < ${ARGUS_BOOT_GRACE_SECONDS}s)"
             fi
@@ -1145,18 +1082,18 @@ execute_action() {
 
     if [[ "$action_result" != "boot-grace" ]]; then
         if [[ "$action_result" == "failure" ]]; then
-            should_create_bead=true
+            should_send_relay_alert=true
         fi
         if (( seen_count >= ARGUS_BEAD_REPEAT_THRESHOLD )); then
-            should_create_bead=true
+            should_send_relay_alert=true
         fi
         if ! action_has_automatic_remediation "$action_type"; then
-            should_create_bead=true
+            should_send_relay_alert=true
         fi
     fi
 
-    if [[ "$should_create_bead" == "true" ]]; then
-        bead_id=$(create_bead "$problem_type" "$description" "$severity" "$action_taken" "$action_result" "$problem_key" "$seen_count" "$service_name")
+    if [[ "$should_send_relay_alert" == "true" ]]; then
+        send_relay_alert "$problem_type" "$severity" "$description" "$action_taken" "$action_result" "$problem_key" "$seen_count"
     fi
 
     log_problem "$severity" "$problem_type" "$description" "$action_taken" "$action_result" "$bead_id" || true # REASON: action execution result should return even if registry append fails.
