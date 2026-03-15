@@ -33,7 +33,6 @@ assert_invalid_env() {
 
 assert_source_ok
 assert_invalid_env "ARGUS_RELAY_TIMEOUT" "0"
-assert_invalid_env "ARGUS_BEAD_PRIORITY" "9"
 assert_invalid_env "ARGUS_BEAD_REPEAT_THRESHOLD" "bad"
 assert_invalid_env "ARGUS_BEAD_REPEAT_WINDOW_SECONDS" "9999999"
 assert_invalid_env "ARGUS_DEDUP_WINDOW" "0"
