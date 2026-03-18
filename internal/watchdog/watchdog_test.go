@@ -651,6 +651,28 @@ func TestMultipleConsecutiveFailures(t *testing.T) {
 	}
 }
 
+func TestShouldPublishAlert(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		before int
+		after  int
+		want   bool
+	}{
+		{before: 0, after: 0, want: false},
+		{before: 0, after: 1, want: true},
+		{before: 1, after: 2, want: false},
+		{before: 2, after: 3, want: true},
+		{before: 5, after: 6, want: true},
+	}
+
+	for _, tt := range tests {
+		if got := shouldPublishAlert(tt.before, tt.after); got != tt.want {
+			t.Fatalf("shouldPublishAlert(%d, %d) = %v, want %v", tt.before, tt.after, got, tt.want)
+		}
+	}
+}
+
 // TestBreadcrumbContractAfterSuccessfulCycle verifies that the breadcrumb file
 // written after a successful cycle contains the expected JSON structure. This
 // matters because the breadcrumb is the crash-recovery mechanism: if the schema
@@ -705,4 +727,3 @@ func TestBreadcrumbContractAfterSuccessfulCycle(t *testing.T) {
 		t.Errorf("breadcrumb Checks = %+v, want [{Name:ok-check OK:true}]", bc.Checks)
 	}
 }
-

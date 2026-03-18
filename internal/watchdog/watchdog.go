@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -242,6 +243,11 @@ func (w *Watchdog) RunCycle(ctx context.Context) error {
 		w.mu.Unlock()
 	}
 
+	state := w.Status()
+	if shouldPublishAlert(priorConsecutiveFailures, state.ConsecutiveFailures) {
+		w.publishCycleAlert(results, state.LastError, end)
+	}
+
 	return cycleErr
 }
 
@@ -399,4 +405,56 @@ func cloneTimePtr(t *time.Time) *time.Time {
 	}
 	copyVal := *t
 	return &copyVal
+}
+
+func shouldPublishAlert(before, after int) bool {
+	return before == 0 && after > 0 || after > 0 && after%3 == 0
+}
+
+func (w *Watchdog) publishCycleAlert(results []CheckStatus, message string, ts time.Time) {
+	checkName := "watchdog"
+	for _, result := range results {
+		if !result.OK {
+			checkName = result.Name
+			break
+		}
+	}
+	payload, err := json.Marshal(map[string]any{
+		"source":   "argus",
+		"check":    checkName,
+		"severity": "critical",
+		"message":  message,
+		"ts":       ts.UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return
+	}
+	go func(body []byte, text string) {
+		if script := resolveNotifyScript(); script != "" {
+			exec.Command(script, text).Run()
+		}
+		exec.Command("relay", "send", "--to", "system", "--type", "alert", "--body", string(body)).Run()
+	}(payload, message)
+}
+
+func resolveNotifyScript() string {
+	if exe, err := os.Executable(); err == nil {
+		if path := filepath.Join(filepath.Dir(exe), "notify-telegram.sh"); isExecutable(path) {
+			return path
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if path := filepath.Join(cwd, "notify-telegram.sh"); isExecutable(path) {
+			return path
+		}
+	}
+	if path, err := exec.LookPath("notify-telegram.sh"); err == nil {
+		return path
+	}
+	return ""
+}
+
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }
