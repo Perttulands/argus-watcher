@@ -235,6 +235,35 @@ collect_agents() {
     fi
 }
 
+collect_skill_health() {
+    echo "=== Skill System ==="
+    local lint_script="$HOME/skills/skill-creator/scripts/lint.sh"
+    if [[ ! -x "$lint_script" ]]; then
+        echo "Skill lint script not found or not executable: $lint_script"
+        return 0
+    fi
+    # Run lint and capture summary line
+    local output
+    output=$("$lint_script" 2>&1) || true # REASON: lint exit 1 means unhealthy; still want to report output.
+    # Extract summary and result lines for the LLM
+    local summary result
+    summary=$(echo "$output" | grep -E '^(PASS|WARN|FAIL):' | tail -1) || true
+    result=$(echo "$output" | grep -E '^Result:' | tail -1) || true
+    if [[ -n "$result" ]]; then
+        echo "  $result"
+    fi
+    if [[ -n "$summary" ]]; then
+        echo "  $summary"
+    fi
+    # Show any FAIL/WARN lines for context
+    local issues
+    issues=$(echo "$output" | grep -E '^\s+(FAIL|WARN):' | head -5) || true
+    if [[ -n "$issues" ]]; then
+        echo "  Issues:"
+        echo "$issues" | while IFS= read -r line; do echo "    $line"; done
+    fi
+}
+
 # Main collection function that calls all collectors.
 # Each collector runs in a subshell so a failure in one does not abort others.
 collect_all_metrics() {
@@ -243,7 +272,7 @@ collect_all_metrics() {
     echo "Host: $(hostname -f 2>/dev/null || hostname)" # REASON: FQDN may be unavailable; fallback to short hostname.
     echo ""
 
-    local collectors=(collect_services collect_system collect_processes collect_athena collect_agents)
+    local collectors=(collect_services collect_system collect_processes collect_athena collect_agents collect_skill_health)
     for collector in "${collectors[@]}"; do
         if ! "$collector" 2>&1; then
             echo "ERROR: ${collector} failed"

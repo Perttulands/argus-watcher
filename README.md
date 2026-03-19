@@ -357,9 +357,7 @@ Argus is the infrastructure watchdog in a larger ecosystem of tools that work to
 
 ---
 
-## Part of the Agora
-
-Argus was forged in **[Athena's Agora](https://github.com/Perttulands/athena-workspace)** — an autonomous coding system where AI agents build software and a hound with one red eye makes sure the server doesn't burn down while they do it.
+Argus was forged as part of Polis, where AI agents build software and a hound with one red eye makes sure the server doesn't burn down while they do it.
 
 [Truthsayer](https://github.com/Perttulands/truthsayer) watches the code. [Oathkeeper](https://github.com/Perttulands/horkos-oathkeeper) watches the promises. [Relay](https://github.com/Perttulands/hermes-relay) carries the messages. Argus watches everything else. Between the four of them, the 3am page is someone else's problem.
 

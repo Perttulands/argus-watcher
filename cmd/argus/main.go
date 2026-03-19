@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -81,6 +83,35 @@ func run(ctx context.Context, logger *log.Logger) (runErr error) {
 					return nil
 				}
 				// Action execution hook for production integrations.
+				return nil
+			},
+		},
+		{
+			Name: "arx-reconcile",
+			Run: func(ctx context.Context, dryRun bool) error {
+				if dryRun {
+					logger.Printf("dry-run: would run arx reconcile")
+					return nil
+				}
+				cmd := exec.CommandContext(ctx, "arx", "reconcile", "--json")
+				out, err := cmd.Output()
+				if err != nil {
+					return fmt.Errorf("arx reconcile failed: %w", err)
+				}
+				var report struct {
+					Phantoms   []string `json:"phantoms"`
+					Mismatched []struct {
+						AgentID string `json:"agent_id"`
+					} `json:"mismatched"`
+				}
+				if err := json.Unmarshal(out, &report); err != nil {
+					return fmt.Errorf("arx reconcile: bad JSON: %w", err)
+				}
+				if len(report.Phantoms) > 0 || len(report.Mismatched) > 0 {
+					return fmt.Errorf("arx drift: phantoms=%d mismatched=%d",
+						len(report.Phantoms), len(report.Mismatched))
+				}
+				logger.Printf("arx-reconcile: ok (no phantoms, no mismatches)")
 				return nil
 			},
 		},
