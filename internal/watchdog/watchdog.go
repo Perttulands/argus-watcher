@@ -182,6 +182,9 @@ func (w *Watchdog) RunCycle(ctx context.Context) error {
 	checkFailures := 0
 
 	for _, check := range checks {
+		if check.Name == "" {
+			check.Name = "unnamed-check"
+		}
 		result := CheckStatus{
 			Name:      check.Name,
 			StartedAt: w.clock().UTC(),

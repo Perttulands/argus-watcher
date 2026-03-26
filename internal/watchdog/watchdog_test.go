@@ -236,6 +236,46 @@ func TestRunCheckNilFunction(t *testing.T) {
 	}
 }
 
+func TestRunCheckEmptyNameFallback(t *testing.T) {
+	t.Parallel()
+
+	wd, err := New(Config{
+		BreadcrumbPath: filepath.Join(t.TempDir(), "watchdog.json"),
+		Logger:         log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	var ranName string
+	wd.SetChecks([]Check{
+		{
+			Name: "", // empty name should fall back to "unnamed-check"
+			Run: func(ctx context.Context, dryRun bool) error {
+				return errors.New("fail with unnamed")
+			},
+		},
+	})
+
+	err = wd.RunCycle(context.Background())
+	if err == nil {
+		t.Fatal("RunCycle() should return error")
+	}
+
+	status := wd.Status()
+	if len(status.Checks) != 1 {
+		t.Fatalf("expected 1 check, got %d", len(status.Checks))
+	}
+	ranName = status.Checks[0].Name
+	if ranName != "unnamed-check" {
+		t.Fatalf("check name = %q, want %q", ranName, "unnamed-check")
+	}
+	// The LastError in status should reference "unnamed-check" (from failureReasons)
+	if !strings.Contains(status.LastError, "unnamed-check") {
+		t.Fatalf("LastError should reference unnamed-check, got: %q", status.LastError)
+	}
+}
+
 func TestRunCycleCancelledContext(t *testing.T) {
 	t.Parallel()
 
