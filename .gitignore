@@ -2,6 +2,7 @@
 argus.env
 .env
 .env.*
+!*.env.tpl
 *credentials*
 *secret*
 *.key
