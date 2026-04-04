@@ -16,13 +16,29 @@ CYCLE_STATE_FILE="${LOG_DIR}/cycle_state.json"
 MAX_LOG_SIZE=$((10 * 1024 * 1024))  # 10 MB
 MAX_LOG_FILES=3
 HOSTNAME_CACHED=""
+LLM_FAILURE_DETAIL=""
+LLM_FAILURE_KIND=""
+LLM_RESPONSE_CONTENT=""
 
 # Source helper scripts
 source "${SCRIPT_DIR}/collectors.sh"
 source "${SCRIPT_DIR}/actions.sh"
 
+STATE_DIR="${ARGUS_STATE_DIR:-${SCRIPT_DIR}/state}"
+LLM_BACKOFF_STATE_FILE="${ARGUS_LLM_BACKOFF_STATE_FILE:-${STATE_DIR}/llm-backoff.json}"
+LLM_BACKOFF_BASE_SECONDS="${ARGUS_LLM_BACKOFF_BASE_SECONDS:-${SLEEP_INTERVAL}}"
+LLM_BACKOFF_MAX_SECONDS="${ARGUS_LLM_BACKOFF_MAX_SECONDS:-7200}"
+LLM_RATE_LIMIT_MIN_SECONDS="${ARGUS_LLM_RATE_LIMIT_MIN_SECONDS:-1800}"
+
+validate_int_env "SLEEP_INTERVAL" 1 86400
+validate_int_env "LLM_TIMEOUT" 1 3600
+validate_int_env "LLM_BACKOFF_BASE_SECONDS" 1 86400
+validate_int_env "LLM_BACKOFF_MAX_SECONDS" 1 86400
+validate_int_env "LLM_RATE_LIMIT_MIN_SECONDS" 1 86400
+
 # Ensure log directory exists
 mkdir -p "$LOG_DIR"
+mkdir -p "$STATE_DIR"
 
 # Cache hostname once at startup
 HOSTNAME_CACHED=$(hostname -f 2>/dev/null || hostname) # REASON: FQDN may be unavailable; fallback to short hostname.
@@ -34,6 +50,175 @@ log() {
     local timestamp
     timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE"
+}
+
+single_line() {
+    tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+state_atomic_write_string() {
+    local target_file="$1"
+    local content="${2:-}"
+    local target_dir tmp_file
+
+    target_dir=$(dirname "$target_file")
+    mkdir -p "$target_dir"
+    tmp_file=$(mktemp "${target_dir}/.$(basename "$target_file").tmp.XXXXXX")
+    printf '%s' "$content" > "$tmp_file"
+    mv "$tmp_file" "$target_file"
+}
+
+classify_llm_failure() {
+    local detail="${1:-}"
+    local lower
+    lower=$(printf '%s' "$detail" | tr '[:upper:]' '[:lower:]')
+
+    case "$lower" in
+        *rate*limit*|*too\ many\ requests*|*429*|*quota*|*cooldown*)
+            echo "rate_limit"
+            ;;
+        *timed*out*|*timeout*)
+            echo "timeout"
+            ;;
+        *empty*response*)
+            echo "empty_response"
+            ;;
+        *invalid*json*|*not*valid*json*)
+            echo "invalid_response"
+            ;;
+        *)
+            echo "error"
+            ;;
+    esac
+}
+
+llm_state_read_field() {
+    local field="$1"
+    local fallback="${2:-}"
+    local value
+
+    if [[ ! -f "$LLM_BACKOFF_STATE_FILE" ]]; then
+        printf '%s\n' "$fallback"
+        return 0
+    fi
+
+    value=$(jq -r "$field // empty" "$LLM_BACKOFF_STATE_FILE" 2>/dev/null) || value=""
+    if [[ -z "$value" ]]; then
+        printf '%s\n' "$fallback"
+    else
+        printf '%s\n' "$value"
+    fi
+}
+
+calculate_llm_backoff_seconds() {
+    local failures="${1:-1}"
+    local kind="${2:-error}"
+    local delay="$LLM_BACKOFF_BASE_SECONDS"
+    local steps
+
+    if [[ ! "$failures" =~ ^[0-9]+$ ]] || (( failures < 1 )); then
+        failures=1
+    fi
+
+    steps=$failures
+    while (( steps > 0 )); do
+        delay=$((delay * 2))
+        if (( delay >= LLM_BACKOFF_MAX_SECONDS )); then
+            delay="$LLM_BACKOFF_MAX_SECONDS"
+            break
+        fi
+        steps=$((steps - 1))
+    done
+
+    if [[ "$kind" == "rate_limit" ]] && (( delay < LLM_RATE_LIMIT_MIN_SECONDS )); then
+        delay="$LLM_RATE_LIMIT_MIN_SECONDS"
+    fi
+
+    printf '%s\n' "$delay"
+}
+
+record_llm_backoff_state() {
+    local kind="${1:-error}"
+    local detail="${2:-LLM call failed}"
+    local now failures delay next_retry_epoch now_iso next_retry_iso payload
+
+    failures=$(llm_state_read_field '.consecutive_failures' '0')
+    if [[ ! "$failures" =~ ^[0-9]+$ ]]; then
+        failures=0
+    fi
+    failures=$((failures + 1))
+
+    delay=$(calculate_llm_backoff_seconds "$failures" "$kind")
+    now=$(date -u +%s)
+    next_retry_epoch=$((now + delay))
+    now_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    next_retry_iso=$(date -u -d "@$next_retry_epoch" +%Y-%m-%dT%H:%M:%SZ)
+
+    payload=$(jq -n \
+        --arg kind "$kind" \
+        --arg detail "$detail" \
+        --arg now_iso "$now_iso" \
+        --arg next_retry_iso "$next_retry_iso" \
+        --argjson failures "$failures" \
+        --argjson delay "$delay" \
+        --argjson next_retry_epoch "$next_retry_epoch" \
+        '{
+            kind: $kind,
+            detail: $detail,
+            consecutive_failures: $failures,
+            delay_seconds: $delay,
+            failed_at: $now_iso,
+            next_retry_at: $next_retry_iso,
+            next_retry_epoch: $next_retry_epoch
+        }')
+
+    state_atomic_write_string "$LLM_BACKOFF_STATE_FILE" "$payload"
+    log WARNING "LLM backoff engaged: kind=${kind}, failures=${failures}, retry_in=${delay}s, next_retry=${next_retry_iso}"
+}
+
+clear_llm_backoff_state() {
+    local payload
+    payload=$(jq -n '{
+        kind: null,
+        detail: "",
+        consecutive_failures: 0,
+        delay_seconds: 0,
+        failed_at: null,
+        next_retry_at: null,
+        next_retry_epoch: 0
+    }')
+    state_atomic_write_string "$LLM_BACKOFF_STATE_FILE" "$payload"
+}
+
+llm_backoff_remaining_seconds() {
+    local next_retry_epoch now
+
+    next_retry_epoch=$(llm_state_read_field '.next_retry_epoch' '0')
+    if [[ ! "$next_retry_epoch" =~ ^[0-9]+$ ]]; then
+        next_retry_epoch=0
+    fi
+
+    now=$(date -u +%s)
+    if (( next_retry_epoch > now )); then
+        printf '%s\n' $((next_retry_epoch - now))
+    else
+        printf '0\n'
+    fi
+}
+
+log_llm_backoff_active() {
+    local remaining="$1"
+    local failures kind next_retry_at detail
+
+    failures=$(llm_state_read_field '.consecutive_failures' '0')
+    kind=$(llm_state_read_field '.kind' 'error')
+    next_retry_at=$(llm_state_read_field '.next_retry_at' 'unknown')
+    detail=$(llm_state_read_field '.detail' '')
+
+    log WARNING "LLM backoff active: kind=${kind}, failures=${failures}, remaining=${remaining}s, next_retry=${next_retry_at}. Skipping LLM call."
+    if [[ -n "$detail" ]]; then
+        log INFO "Last LLM failure detail: $detail"
+    fi
 }
 
 # Rotate log file when it exceeds MAX_LOG_SIZE
@@ -63,6 +248,9 @@ rotate_log() {
 call_llm() {
     local system_prompt="$1"
     local user_message="$2"
+    LLM_FAILURE_DETAIL=""
+    LLM_FAILURE_KIND=""
+    LLM_RESPONSE_CONTENT=""
 
     local full_prompt
     full_prompt=$(printf '%s\n\n---\n\n%s\n\nRespond with ONLY valid JSON. No markdown, no explanation.' "$system_prompt" "$user_message")
@@ -74,24 +262,33 @@ call_llm() {
 
     if [[ $exit_code -ne 0 ]]; then
         local stderr_output
-        stderr_output=$(cat "$stderr_file" 2>/dev/null; rm -f "$stderr_file") # REASON: temp file may already be cleaned up
+        stderr_output=$(cat "$stderr_file" 2>/dev/null | single_line; rm -f "$stderr_file") # REASON: temp file may already be cleaned up
         if [[ $exit_code -eq 124 ]]; then
-            log ERROR "claude -p timed out after ${LLM_TIMEOUT}s"
+            LLM_FAILURE_DETAIL="claude -p timed out after ${LLM_TIMEOUT}s"
+            log ERROR "$LLM_FAILURE_DETAIL"
         else
-            log ERROR "claude -p call failed (exit code: $exit_code)"
+            LLM_FAILURE_DETAIL="claude -p call failed (exit code: $exit_code)"
+            log ERROR "$LLM_FAILURE_DETAIL"
         fi
-        [[ -n "$stderr_output" ]] && log ERROR "claude -p stderr: $stderr_output"
+        if [[ -n "$stderr_output" ]]; then
+            LLM_FAILURE_DETAIL="$stderr_output"
+            log ERROR "claude -p stderr: $stderr_output"
+        fi
+        LLM_FAILURE_KIND=$(classify_llm_failure "$LLM_FAILURE_DETAIL")
         return 1
     fi
 
     rm -f "$stderr_file"
 
     if [[ -z "$response" ]]; then
-        log ERROR "Empty response from claude -p"
+        LLM_FAILURE_DETAIL="Empty response from claude -p"
+        LLM_FAILURE_KIND=$(classify_llm_failure "$LLM_FAILURE_DETAIL")
+        log ERROR "$LLM_FAILURE_DETAIL"
         return 1
     fi
 
-    echo "$response"
+    LLM_RESPONSE_CONTENT="$response"
+    return 0
 }
 
 process_llm_response() {
@@ -102,6 +299,8 @@ process_llm_response() {
 
     # Validate JSON
     if ! echo "$response" | jq empty 2>/dev/null; then # REASON: jq parse errors are less useful than our raw response log below.
+        LLM_FAILURE_DETAIL="LLM response is not valid JSON"
+        LLM_FAILURE_KIND=$(classify_llm_failure "$LLM_FAILURE_DETAIL")
         log ERROR "LLM response is not valid JSON"
         log ERROR "Raw response (first 500 chars): ${response:0:500}"
         return 1
@@ -249,6 +448,16 @@ run_monitoring_cycle() {
     # Append self-monitoring info to metrics
     metrics=$(printf '%s\n\n=== Argus Self-Monitor ===\n%s' "$metrics" "$self_check")
 
+    # Skip LLM calls while cooldown is active, but keep deterministic checks running.
+    local llm_backoff_remaining
+    llm_backoff_remaining=$(llm_backoff_remaining_seconds)
+    if (( llm_backoff_remaining > 0 )); then
+        log_llm_backoff_active "$llm_backoff_remaining"
+        record_cycle_state "ok" "LLM backoff active"
+        log INFO "===== Cycle complete ====="
+        return 0
+    fi
+
     # Load system prompt
     if [[ ! -f "$PROMPT_FILE" ]]; then
         log ERROR "Prompt file not found: $PROMPT_FILE"
@@ -263,12 +472,13 @@ run_monitoring_cycle() {
 
     # Call LLM
     log INFO "Calling LLM..."
-    local llm_response
-    if ! llm_response=$(call_llm "$system_prompt" "$metrics"); then
+    if ! call_llm "$system_prompt" "$metrics"; then
         log ERROR "LLM call failed"
-        record_cycle_state "failed" "LLM call failed"
+        record_llm_backoff_state "${LLM_FAILURE_KIND:-error}" "${LLM_FAILURE_DETAIL:-LLM call failed}"
+        record_cycle_state "failed" "${LLM_FAILURE_DETAIL:-LLM call failed}"
         return 1
     fi
+    local llm_response="$LLM_RESPONSE_CONTENT"
 
     # Save raw response for debugging
     state_atomic_write_string "${LOG_DIR}/last_response.json" "$llm_response"
@@ -276,10 +486,12 @@ run_monitoring_cycle() {
     # Process response and execute actions
     if ! process_llm_response "$llm_response"; then
         log ERROR "Failed to process LLM response"
-        record_cycle_state "failed" "LLM response processing failed"
+        record_llm_backoff_state "${LLM_FAILURE_KIND:-invalid_response}" "${LLM_FAILURE_DETAIL:-LLM response processing failed}"
+        record_cycle_state "failed" "${LLM_FAILURE_DETAIL:-LLM response processing failed}"
         return 1
     fi
 
+    clear_llm_backoff_state
     record_cycle_state "ok"
     log INFO "===== Cycle complete ====="
 }
@@ -315,7 +527,13 @@ main() {
         log INFO "Entering continuous monitoring loop"
         while true; do
             if ! run_monitoring_cycle; then
-                log ERROR "Cycle failed, will retry in ${SLEEP_INTERVAL}s"
+                local llm_backoff_remaining
+                llm_backoff_remaining=$(llm_backoff_remaining_seconds)
+                if (( llm_backoff_remaining > SLEEP_INTERVAL )); then
+                    log ERROR "Cycle failed, next loop in ${SLEEP_INTERVAL}s (LLM backoff ${llm_backoff_remaining}s remaining)"
+                else
+                    log ERROR "Cycle failed, will retry in ${SLEEP_INTERVAL}s"
+                fi
             fi
             sleep "$SLEEP_INTERVAL" &
             wait $! 2>/dev/null || break  # REASON: wait on backgrounded sleep emits stderr when interrupted by signal; this is the standard interruptible-sleep pattern.

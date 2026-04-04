@@ -175,6 +175,7 @@ No arbitrary command execution. Every input is validated like it's trying to esc
 
 - Log rotation at 10MB (3 backups)
 - Disk space guard — skips LLM call if root filesystem `< 100MB` free; sends emergency alert
+- Persistent LLM backoff — exponential cooldown after LLM failures, with a longer minimum for rate-limit failures
 - Self-monitoring — escalates after 3 consecutive cycle failures
 - Boot grace period — suppresses service restart failure beads during `ARGUS_BOOT_GRACE_SECONDS` (default 120s)
 - Clean shutdown on `SIGTERM`/`SIGINT`
@@ -310,6 +311,9 @@ Copy `argus.env.example` to `argus.env` and edit. Key variables:
 | `ARGUS_RELAY_BIN` | `$HOME/go/bin/relay` | Relay CLI path |
 | `ARGUS_DEDUP_WINDOW` | `3600` | Alert suppression window (seconds) |
 | `ARGUS_BEAD_REPEAT_THRESHOLD` | `3` | Recurrence count for bead creation |
+| `ARGUS_LLM_BACKOFF_BASE_SECONDS` | `ARGUS_INTERVAL` | Base LLM cooldown; first failure doubles from here |
+| `ARGUS_LLM_BACKOFF_MAX_SECONDS` | `7200` | Maximum LLM cooldown cap |
+| `ARGUS_LLM_RATE_LIMIT_MIN_SECONDS` | `1800` | Minimum cooldown when failure looks like rate limiting |
 | `ARGUS_RESTART_BACKOFF_SECOND_DELAY` | `60` | Delay before 2nd restart attempt |
 | `ARGUS_RESTART_COOLDOWN_SECONDS` | `3600` | Cooldown after restart loop detection |
 | `ARGUS_DISK_CLEAN_MAX_AGE_DAYS` | `7` | Cleanup age threshold |
